@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  fiftyfive-labs:
+    build: .
+    container_name: fiftyfive-labs
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Admin Configuration
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-changeme}
+      
+      # Image Generation API
+      - IMAGE_API_URL=${IMAGE_API_URL:-https://api.together.xyz/v1/images/generations}
+      - IMAGE_API_KEY=${IMAGE_API_KEY:-}
+      
+      # Rate Limiting
+      - DEFAULT_HOURLY_LIMIT=${DEFAULT_HOURLY_LIMIT:-2000}
+      - DEFAULT_CONCURRENT_LIMIT=${DEFAULT_CONCURRENT_LIMIT:-3}
+      - MAX_CONCURRENT_PER_KEY=${MAX_CONCURRENT_PER_KEY:-10}
+      
+      # Timing
+      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT:-120}
+      - IMAGE_TTL_SECONDS=${IMAGE_TTL_SECONDS:-86400}
+      
+      # Database
+      - DB_PATH=/app/data/fiftyfive.db
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  data:

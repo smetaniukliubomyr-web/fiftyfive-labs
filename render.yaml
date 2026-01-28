@@ -1,0 +1,51 @@
+# ===========================================
+# Render.com Blueprint Configuration
+# FiftyFive Labs - AI Image Generation Platform
+# ===========================================
+
+services:
+  - type: web
+    name: fiftyfive-labs
+    runtime: docker
+    region: frankfurt
+    plan: starter
+    
+    healthCheckPath: /api/health
+    
+    envVars:
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: IMAGE_API_URL
+        value: https://api.together.xyz/v1/images/generations
+      - key: IMAGE_API_KEY
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      # Rate Limiting
+      - key: DEFAULT_HOURLY_LIMIT
+        value: "2000"
+      - key: DEFAULT_CONCURRENT_LIMIT
+        value: "3"
+      - key: MAX_CONCURRENT_PER_KEY
+        value: "10"
+      
+      # Timing
+      - key: REQUEST_TIMEOUT
+        value: "120"
+      - key: IMAGE_TTL_SECONDS
+        value: "86400"
+      
+      # Database
+      - key: DATA_DIR
+        value: /app/data
+      - key: DB_PATH
+        value: /app/data/fiftyfive.db
+
+    disk:
+      name: fiftyfive-data
+      mountPath: /app/data
+      sizeGB: 10
+
+    autoDeploy: true

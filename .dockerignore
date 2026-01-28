@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# Local data (use Render disk or volumes)
+data/
+
+# Dependencies (reinstalled in build)
+node_modules/
+
+# Build output (rebuilt in Docker)
+dist/
+
+# Python
+__pycache__
+*.py[cod]
+*.pyo
+.venv
+venv
+*.egg-info
+
+# IDE and OS
+.idea
+.vscode
+*.swp
+.DS_Store
+
+# Docs and dev
+README.md
+docker-compose.yml
+start.sh
+
+# Tests
+*test*
+*spec*
+coverage
+.pytest_cache
