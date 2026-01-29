@@ -3012,7 +3012,7 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
       const msg = err?.message || '';
       const is503 = /503|service unavailable|unavailable/i.test(msg);
       showToast(
-        is503 ? 'Image generation unavailable. Add Whisk/VoidAI/Naga API keys in Admin.' : (msg || 'Generation failed'),
+        is503 ? 'Image generation unavailable. Add Fast Gen/VoidAI/Naga API keys in Admin.' : (msg || 'Generation failed'),
         'error'
       );
     }).finally(() => {
@@ -3139,7 +3139,7 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
               <div className="space-y-3 pt-4 border-t border-gray-100">
                 <div className="grid grid-cols-3 gap-2">
                   {[
-                    { id: 'IMAGEN_4', name: 'Imagen 4 (Whisk)', desc: 'Google Whisk', defaultCredits: 1 },
+                    { id: 'IMAGEN_4', name: 'Imagen 4 (Fast Gen)', desc: 'Fast Gen', defaultCredits: 1 },
                     { id: 'GEM_PIX', name: 'Nano Banana', desc: 'Flow', defaultCredits: 1 },
                     { id: 'GEM_PIX_2', name: 'Nano Banana Pro', desc: 'Flow', defaultCredits: 2 },
                     { id: 'IMAGEN_3_5', name: 'Imagen 3.5', desc: 'Flow', defaultCredits: 1 },
@@ -5432,7 +5432,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                             {k.provider === 'elevenlabs' 
                               ? 'ElevenLabs' 
                               : (k.provider === 'whisk')
-                              ? 'Whisk API (Imagen 4)'
+                              ? 'Fast Gen (Imagen 4)'
                               : k.provider === 'voidai'
                               ? 'VoidAI API'
                               : k.provider === 'naga'
@@ -5555,7 +5555,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <Image className="w-4 h-4" />
-                    <span className="font-medium text-sm">Whisk API (Imagen 4)</span>
+                    <span className="font-medium text-sm">Fast Gen (Imagen 4)</span>
                   </div>
                   <p className="text-xs text-gray-500">Image generation</p>
                 </button>
@@ -5595,7 +5595,7 @@ function AdminPanelPage({ showToast, onLogout }) {
               label="Name" 
               placeholder={
                 newKeyData.provider === 'voicer' ? 'My Voicer Key' : 
-                newKeyData.provider === 'whisk' ? 'My Whisk API Key' : 
+                newKeyData.provider === 'whisk' ? 'My Fast Gen API Key' : 
                 newKeyData.provider === 'voidai' ? 'My VoidAI API Key' : 
                 newKeyData.provider === 'naga' ? 'My Naga API Key' : 
                 'My ElevenLabs Key'
@@ -5607,7 +5607,7 @@ function AdminPanelPage({ showToast, onLogout }) {
               label="API Key" 
               placeholder={
                 newKeyData.provider === 'voicer' ? 'Enter Voicer API key...' : 
-                newKeyData.provider === 'whisk' ? 'Enter Whisk API key...' : 
+                newKeyData.provider === 'whisk' ? 'Enter Fast Gen API key...' : 
                 newKeyData.provider === 'voidai' ? 'Enter VoidAI API key (sk-voidai-...)...' : 
                 newKeyData.provider === 'naga' ? 'Enter Naga API key...' : 
                 'Enter ElevenLabs API key...'
@@ -5641,7 +5641,7 @@ function AdminPanelPage({ showToast, onLogout }) {
             <Card className="p-6">
               <div className="space-y-4">
                 {[
-                  { id: 'IMAGEN_4', name: 'Imagen 4 (Whisk)', model: 'imagen4', defaultCredits: 1 },
+                  { id: 'IMAGEN_4', name: 'Imagen 4 (Fast Gen)', model: 'imagen4', defaultCredits: 1 },
                   { id: 'GEM_PIX', name: 'Nano Banana (Flow)', model: 'GEM_PIX', defaultCredits: 1 },
                   { id: 'GEM_PIX_2', name: 'Nano Banana Pro (Flow)', model: 'GEM_PIX_2', defaultCredits: 2 },
                   { id: 'IMAGEN_3_5', name: 'Imagen 3.5 (Flow)', model: 'IMAGEN_3_5', defaultCredits: 1 },

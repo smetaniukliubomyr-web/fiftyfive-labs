@@ -2956,7 +2956,7 @@ def get_elevenlabs_api_key() -> Optional[str]:
         con.close()
 
 def get_whisk_api_key() -> Optional[tuple]:
-    """Get an active Whisk (Google Imagen 4) API key from the pool. Returns (key_id, api_key) or None.
+    """Get an active Fast Gen API key from the pool (Imagen 4, Flow, Grok). Returns (key_id, api_key) or None.
     If no key in DB, uses env WHISK_API_KEY (key_id will be 'env')."""
     con = db_conn()
     try:
@@ -4580,10 +4580,12 @@ async def ensure_audio_downloaded(task_id: str, voicer_key: str) -> Optional[str
     return None
 
 # =============================================================================
-# Image Generation Endpoints (Google Whisk API / Imagen 4 + VoidAI + Naga)
+# Image Generation Endpoints (Fast Gen: Imagen 4, Nano Banana, Grok + VoidAI + Naga)
 # =============================================================================
 
-WHISK_API_BASE = os.getenv("WHISK_API_BASE", "").rstrip("/")  # media_gen_api base (Whisk, Flow, Grok)
+# Fast Gen (googler.fast-gen.ai): Imagen 4, Flow/Nano Banana, Grok — same base & X-API-Key
+FAST_GEN_API_BASE_DEFAULT = "https://googler.fast-gen.ai"
+WHISK_API_BASE = (os.getenv("WHISK_API_BASE") or os.getenv("FAST_GEN_API_BASE") or FAST_GEN_API_BASE_DEFAULT).rstrip("/")
 
 # Same API base/key: Flow (Nano, Nano Pro, Imagen 3.5) and Grok
 FLOW_MODELS = ["GEM_PIX", "GEM_PIX_2", "IMAGEN_3_5"]  # POST /api/v4/flow/image/generate
@@ -4659,7 +4661,7 @@ async def image_generate(
     authorization: Optional[str] = Header(None),
     token: Optional[str] = Query(None)
 ):
-    """Generate image using Google Whisk (Imagen 4), VoidAI or Naga API"""
+    """Generate image using Fast Gen (Imagen 4, Nano Banana, Grok), VoidAI or Naga API"""
     tok = _extract_token(authorization, token)
     user = require_user(tok)
     
@@ -4671,7 +4673,7 @@ async def image_generate(
     # Map model from frontend
     model_old = body.get("model", "IMAGEN_4")
     
-    # Determine provider based on model (same API base for Whisk, Flow, Grok)
+    # Determine provider based on model (same Fast Gen API base for Imagen 4, Flow, Grok)
     is_whisk = model_old == "IMAGEN_4"
     is_flow = model_old in FLOW_MODELS
     is_grok = model_old == GROK_MODEL
@@ -4689,29 +4691,23 @@ async def image_generate(
     model = None
     
     if is_whisk:
-        if not WHISK_API_BASE:
-            raise HTTPException(503, "Whisk/Flow/Grok API base not configured. Set WHISK_API_BASE.")
         key_data = get_whisk_api_key()
         if not key_data:
-            raise HTTPException(503, "No Whisk/Flow/Grok API key. Add a Whisk API key in admin or set WHISK_API_KEY.")
+            raise HTTPException(503, "No Fast Gen API key. Add a Fast Gen API key in admin or set WHISK_API_KEY.")
         api_key_id, whisk_api_key = key_data
         provider = "whisk"
         model = "imagen4"
     elif is_flow:
-        if not WHISK_API_BASE:
-            raise HTTPException(503, "Whisk/Flow/Grok API base not configured. Set WHISK_API_BASE.")
         key_data = get_whisk_api_key()
         if not key_data:
-            raise HTTPException(503, "No Whisk/Flow/Grok API key. Add a Whisk API key in admin or set WHISK_API_KEY.")
+            raise HTTPException(503, "No Fast Gen API key. Add a Fast Gen API key in admin or set WHISK_API_KEY.")
         api_key_id, whisk_api_key = key_data
         provider = "flow"
         model = model_old  # GEM_PIX, GEM_PIX_2, IMAGEN_3_5
     elif is_grok:
-        if not WHISK_API_BASE:
-            raise HTTPException(503, "Whisk/Flow/Grok API base not configured. Set WHISK_API_BASE.")
         key_data = get_whisk_api_key()
         if not key_data:
-            raise HTTPException(503, "No Whisk/Flow/Grok API key. Add a Whisk API key in admin or set WHISK_API_KEY.")
+            raise HTTPException(503, "No Fast Gen API key. Add a Fast Gen API key in admin or set WHISK_API_KEY.")
         api_key_id, whisk_api_key = key_data
         provider = "grok"
         model = "grok"
@@ -4736,7 +4732,7 @@ async def image_generate(
     if not api_key_id or not provider:
         raise HTTPException(500, f"Failed to initialize provider. api_key_id={api_key_id}, provider={provider}")
     
-    # Aspect ratio: keep enum for Whisk API; map to landscape/portrait/square for metadata and other providers
+    # Aspect ratio: keep enum for Fast Gen API; map to landscape/portrait/square for metadata and other providers
     aspect_ratio_old = body.get("aspect_ratio", "IMAGE_ASPECT_RATIO_LANDSCAPE")
     if aspect_ratio_old not in ("IMAGE_ASPECT_RATIO_PORTRAIT", "IMAGE_ASPECT_RATIO_LANDSCAPE", "IMAGE_ASPECT_RATIO_SQUARE"):
         aspect_ratio_old = "IMAGE_ASPECT_RATIO_LANDSCAPE"
@@ -4854,8 +4850,8 @@ async def image_generate(
                 raise HTTPException(500, "VoidAI API key not available")
             if is_naga and not naga_api_key:
                 raise HTTPException(500, "Naga API key not available")
-            if (is_whisk or is_flow or is_grok) and not whisk_api_key:
-                raise HTTPException(500, "Whisk/Flow/Grok API key not available")
+                if (is_whisk or is_flow or is_grok) and not whisk_api_key:
+                raise HTTPException(500, "Fast Gen API key not available")
             
             await rate_limiter.acquire_concurrent(api_key_id, user["id"])
             
@@ -5232,7 +5228,7 @@ async def image_generate(
                 whisk_headers = {"Content-Type": "application/json"}
                 if whisk_api_key:
                     whisk_headers["X-API-Key"] = whisk_api_key
-                _debug_log(f"[IMAGE] Requesting Flow API: {WHISK_API_BASE}/api/v4/flow/image/generate")
+                _debug_log(f"[IMAGE] Requesting Fast Gen Flow API: {WHISK_API_BASE}/api/v4/flow/image/generate")
                 async with httpx.AsyncClient(timeout=120) as client:
                     try:
                         response = await client.post(
@@ -5296,7 +5292,7 @@ async def image_generate(
                 whisk_headers = {"Content-Type": "application/json"}
                 if whisk_api_key:
                     whisk_headers["X-API-Key"] = whisk_api_key
-                _debug_log(f"[IMAGE] Requesting Grok API: {WHISK_API_BASE}/api/v4/grok/image/generate")
+                _debug_log(f"[IMAGE] Requesting Fast Gen Grok API: {WHISK_API_BASE}/api/v4/grok/image/generate")
                 async with httpx.AsyncClient(timeout=120) as client:
                     try:
                         response = await client.post(
@@ -5353,7 +5349,7 @@ async def image_generate(
                             con2.close()
                         raise HTTPException(500, str(e))
             else:
-                # Whisk (Imagen 4): POST /api/v4/whisk/image/generate
+                # Fast Gen Imagen 4: POST /api/v4/whisk/image/generate
                 whisk_payload = {
                     "prompt": prompt,
                     "aspect_ratio": aspect_ratio_old,
@@ -5363,7 +5359,7 @@ async def image_generate(
                 whisk_headers = {"Content-Type": "application/json"}
                 if whisk_api_key:
                     whisk_headers["X-API-Key"] = whisk_api_key
-                _debug_log(f"[IMAGE] Requesting Whisk API: {WHISK_API_BASE}/api/v4/whisk/image/generate")
+                _debug_log(f"[IMAGE] Requesting Fast Gen Whisk (Imagen 4) API: {WHISK_API_BASE}/api/v4/whisk/image/generate")
                 async with httpx.AsyncClient(timeout=120) as client:
                     try:
                         response = await client.post(
@@ -5372,7 +5368,7 @@ async def image_generate(
                             json=whisk_payload,
                         )
                         response_text = response.text
-                        _debug_log(f"[IMAGE] Whisk API response status: {response.status_code}, body: {response_text[:500]}")
+                        _debug_log(f"[IMAGE] Fast Gen Whisk API response status: {response.status_code}, body: {response_text[:500]}")
                         if response.status_code not in [200, 201]:
                             await rate_limiter.release_concurrent(api_key_id, user["id"])
                             try:
@@ -5381,7 +5377,7 @@ async def image_generate(
                                 if isinstance(error_msg, list):
                                     error_msg = error_msg[0].get("msg", str(error_msg)) if error_msg else response_text
                             except Exception:
-                                error_msg = response_text[:500] or f"Whisk API error: {response.status_code}"
+                                error_msg = response_text[:500] or f"Fast Gen API error: {response.status_code}"
                             con2 = db_conn()
                             try:
                                 con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
@@ -5393,7 +5389,7 @@ async def image_generate(
                         operation_id = result.get("operation_id")
                         if not operation_id:
                             await rate_limiter.release_concurrent(api_key_id, user["id"])
-                            error_msg = "No operation_id in Whisk API response"
+                            error_msg = "No operation_id in Fast Gen API response"
                             con2 = db_conn()
                             try:
                                 con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
@@ -5408,11 +5404,11 @@ async def image_generate(
                             con2.commit()
                         finally:
                             con2.close()
-                        _debug_log(f"[IMAGE] Whisk operation_id: {operation_id}, task_id: {task_id}")
+                        _debug_log(f"[IMAGE] Fast Gen operation_id: {operation_id}, task_id: {task_id}")
                     except HTTPException:
                         raise
                     except Exception as parse_error:
-                        _debug_log(f"[IMAGE] Whisk request error: {parse_error}")
+                        _debug_log(f"[IMAGE] Fast Gen request error: {parse_error}")
                         await rate_limiter.release_concurrent(api_key_id, user["id"])
                         con2 = db_conn()
                         try:
@@ -5506,7 +5502,7 @@ async def image_status(
                     "prompt": job_prompt
                 }
             
-            # Poll Google Whisk API: GET /api/v4/operations/{operation_id}
+            # Poll Fast Gen API: GET /api/v4/operations/{operation_id}
             whisk_operation_id = metadata.get("whisk_operation_id")
             if whisk_operation_id and WHISK_API_BASE:
                 key_data = get_whisk_api_key()
@@ -5575,7 +5571,7 @@ async def image_status(
                                 con.commit()
                                 return {"status": "failed", "error": error_msg, "progress": 0, "prompt": job_prompt}
                 except Exception as e:
-                    _debug_log(f"[IMAGE] Error polling Whisk operation: {e}")
+                    _debug_log(f"[IMAGE] Error polling Fast Gen operation: {e}")
             
             # Still processing
             return {"status": "processing", "progress": 50}
@@ -5690,7 +5686,7 @@ async def image_status(
                     all_imgs = [{"data_uri": p["data_uri"], "url": p.get("url")} for p in processed]
                     return {"status": "completed", "result": primary["data_uri"], "data_uri": primary["data_uri"], "all_images": all_imgs, "progress": 100, "prompt": (prompt or "")[:500]}
 
-                # Queued Whisk / Flow / Grok: start via same API base
+                # Queued Fast Gen (Whisk/Flow/Grok): start via same API base
                 is_whisk_queued = metadata.get("provider") == "whisk"
                 is_flow_queued = metadata.get("provider") == "flow"
                 is_grok_queued = metadata.get("provider") == "grok"
@@ -5701,7 +5697,7 @@ async def image_status(
                 )
                 seed = metadata.get("seed")
                 model_queued = metadata.get("model_old")
-                if (is_whisk_queued or is_flow_queued or is_grok_queued) and WHISK_API_BASE:
+                if is_whisk_queued or is_flow_queued or is_grok_queued:
                     key_data = get_whisk_api_key()
                     if not key_data:
                         position = con.execute(
@@ -5744,7 +5740,7 @@ async def image_status(
                                     (_json_dumps(metadata), task_id)
                                 )
                                 con.commit()
-                                _debug_log(f"[IMAGE] Queued {task_id} → processing (Whisk operation_id: {operation_id})")
+                                _debug_log(f"[IMAGE] Queued {task_id} → processing (Fast Gen operation_id: {operation_id})")
                                 return {"status": "processing", "progress": 50}
                         await rate_limiter.release_concurrent(api_key_id, user["id"])
                     except Exception as e:
@@ -5752,7 +5748,7 @@ async def image_status(
                             await rate_limiter.release_concurrent(api_key_id, user["id"])
                         except Exception:
                             pass
-                        _debug_log(f"[IMAGE] Error starting queued Whisk task {task_id}: {e}")
+                        _debug_log(f"[IMAGE] Error starting queued Fast Gen task {task_id}: {e}")
                         con.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (str(e), task_id))
                         con.commit()
                         return {"status": "failed", "error": str(e), "progress": 0, "prompt": (prompt or "")[:500]}
