@@ -4850,7 +4850,7 @@ async def image_generate(
                 raise HTTPException(500, "VoidAI API key not available")
             if is_naga and not naga_api_key:
                 raise HTTPException(500, "Naga API key not available")
-                if (is_whisk or is_flow or is_grok) and not whisk_api_key:
+            if (is_whisk or is_flow or is_grok) and not whisk_api_key:
                 raise HTTPException(500, "Fast Gen API key not available")
             
             await rate_limiter.acquire_concurrent(api_key_id, user["id"])
