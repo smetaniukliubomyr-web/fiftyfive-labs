@@ -1,0 +1,34 @@
+# Env and secrets
+.env
+.env.*
+!.env.example
+
+# Local data and DB (created at runtime / on server)
+data/
+*.db
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv
+venv
+*.egg-info
+
+# IDE and OS
+.idea
+.vscode
+*.swp
+.DS_Store
+
+# Tests and coverage
+*test*
+*spec*
+coverage
+.pytest_cache
