@@ -2894,6 +2894,16 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
       return;
     }
 
+    // Check credits from packages (same as Generate Voice)
+    const creditsPerImage = modelPricing[model] || 1;
+    const totalImages = prompts.length * numImages;
+    const totalCost = totalImages * creditsPerImage;
+    const totalCredits = (user?.credit_packages || []).reduce((sum, p) => sum + (p.credits_remaining || 0), 0);
+    if (totalCredits < totalCost) {
+      showToast(`Insufficient credits. Need ${totalCost.toLocaleString()}, have ${totalCredits.toLocaleString()}`, 'error');
+      return;
+    }
+
     setIsGenerating(true);
     const releaseTimer = setTimeout(() => setIsGenerating(false), 2000);
 
