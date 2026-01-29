@@ -380,9 +380,7 @@ def init_db():
     
     # Initialize default pricing if table is empty (all image generation models)
     default_pricing = [
-        ('IMAGEN_3_5', 1),
-        ('GEM_PIX', 1),
-        ('GEM_PIX_2', 2),
+        ('IMAGEN_4', 1),  # Google Whisk (Imagen 4)
         ('gpt-image-1', 1),
         ('gpt-image-1.5', 1),
         ('imagen-3.0-generate-002', 2),
@@ -2629,7 +2627,7 @@ async def admin_list_api_keys(x_admin_token: Optional[str] = Header(None)):
         for k in keys:
             provider = k["provider"] if k["provider"] else "together"
             # Normalize provider name for consistency
-            if provider not in ["voicer", "elevenlabs", "imaginator", "fast_api", "voidai", "naga", "together"]:
+            if provider not in ["voicer", "elevenlabs", "whisk", "voidai", "naga", "together"]:
                 _debug_log(f"[ADMIN] Warning: Unknown provider '{provider}' for key {k['id']}, keeping as is")
             
             result_keys.append({
@@ -2740,7 +2738,7 @@ async def admin_create_api_key(
     # Normalize provider name (lowercase, trim)
     provider = provider.strip().lower()
     
-    valid_providers = ["voicer", "elevenlabs", "imaginator", "fast_api", "voidai", "naga", "together"]
+    valid_providers = ["voicer", "elevenlabs", "whisk", "voidai", "naga", "together"]
     if provider not in valid_providers:
         raise HTTPException(400, f"Invalid provider: '{body.provider}'. Valid providers: {', '.join(valid_providers)}")
     
@@ -2953,22 +2951,24 @@ def get_elevenlabs_api_key() -> Optional[str]:
     finally:
         con.close()
 
-def get_imaginator_api_key() -> Optional[tuple]:
-    """Get an active Imaginator API key from the pool. Returns (key_id, api_key) or None"""
+def get_whisk_api_key() -> Optional[tuple]:
+    """Get an active Whisk (Google Imagen 4) API key from the pool. Returns (key_id, api_key) or None.
+    If no key in DB, uses env WHISK_API_KEY (key_id will be 'env')."""
     con = db_conn()
     try:
-        # Support both 'fast_api' (legacy) and 'imaginator' provider names
         key = con.execute("""
             SELECT id, api_key FROM api_keys 
-            WHERE is_active = 1 AND (provider = 'fast_api' OR provider = 'imaginator')
+            WHERE is_active = 1 AND provider = 'whisk'
             ORDER BY last_used_ms ASC NULLS FIRST
             LIMIT 1
         """).fetchone()
         if key:
-            # Update last_used_ms
             con.execute("UPDATE api_keys SET last_used_ms = ? WHERE id = ?", (now_ms(), key["id"]))
             con.commit()
             return (key["id"], key["api_key"])
+        env_key = os.getenv("WHISK_API_KEY")
+        if env_key:
+            return ("env", env_key)
         return None
     finally:
         con.close()
@@ -4576,10 +4576,10 @@ async def ensure_audio_downloaded(task_id: str, voicer_key: str) -> Optional[str
     return None
 
 # =============================================================================
-# Image Generation Endpoints (Imaginator API)
+# Image Generation Endpoints (Google Whisk API / Imagen 4 + VoidAI + Naga)
 # =============================================================================
 
-IMAGINATOR_API_BASE = os.getenv("IMAGINATOR_API_BASE", "https://imaginator.mat3u.com/api/v1")
+WHISK_API_BASE = os.getenv("WHISK_API_BASE", "").rstrip("/")  # e.g. https://your-whisk-api.example.com
 
 VOIDAI_API_BASE = os.getenv("VOIDAI_API_BASE", "https://api.voidai.app/v1")
 VOIDAI_MODELS = [
@@ -4651,7 +4651,7 @@ async def image_generate(
     authorization: Optional[str] = Header(None),
     token: Optional[str] = Query(None)
 ):
-    """Generate image using Imaginator or VoidAI API"""
+    """Generate image using Google Whisk (Imagen 4), VoidAI or Naga API"""
     tok = _extract_token(authorization, token)
     user = require_user(tok)
     
@@ -4660,24 +4660,34 @@ async def image_generate(
     if not prompt:
         raise HTTPException(400, "Prompt is required")
     
-    # Map model from old format
-    model_old = body.get("model", "IMAGEN_3_5")
+    # Map model from frontend
+    model_old = body.get("model", "IMAGEN_4")
     
     # Determine provider based on model
+    is_whisk = model_old == "IMAGEN_4"
     is_voidai = model_old in VOIDAI_MODELS
     is_naga = model_old in NAGA_MODELS
     
-    _debug_log(f"[IMAGE] Model received: {model_old}, is_voidai: {is_voidai}, is_naga: {is_naga}")
+    _debug_log(f"[IMAGE] Model received: {model_old}, is_whisk: {is_whisk}, is_voidai: {is_voidai}, is_naga: {is_naga}")
     
     # Initialize variables
     api_key_id = None
     voidai_api_key = None
     naga_api_key = None
-    imaginator_api_key = None
+    whisk_api_key = None
     provider = None
     model = None
     
-    if is_voidai:
+    if is_whisk:
+        if not WHISK_API_BASE:
+            raise HTTPException(503, "Whisk API base URL not configured. Set WHISK_API_BASE in environment or add a Whisk API key in the admin panel.")
+        key_data = get_whisk_api_key()
+        if not key_data:
+            raise HTTPException(503, "No Whisk (Google Imagen 4) API keys configured. Add a Whisk API key in the admin panel or set WHISK_API_KEY.")
+        api_key_id, whisk_api_key = key_data
+        provider = "whisk"
+        model = "imagen4"
+    elif is_voidai:
         key_data = get_voidai_api_key()
         if not key_data:
             raise HTTPException(503, "No VoidAI API keys configured. Please add a VoidAI API key in the admin panel.")
@@ -4692,34 +4702,22 @@ async def image_generate(
         model = NAGA_MODEL_MAP.get(model_old, "flux-1-schnell:free")
         provider = "naga"
     else:
-        key_data = get_imaginator_api_key()
-        if not key_data:
-            raise HTTPException(503, "No Imaginator API keys configured")
-        api_key_id, imaginator_api_key = key_data
-        provider = "imaginator"
-        if model_old == "IMAGEN_3_5":
-            model = "imagen3.5"
-        elif model_old == "GEM_PIX":
-            model = "nano_banana"
-        elif model_old == "GEM_PIX_2":
-            model = "nano_banana_pro"
-        else:
-            model = "imagen3.5"
+        raise HTTPException(400, f"Unknown model: {model_old}. Use IMAGEN_4 (Whisk), VoidAI or Naga models.")
     
-    # Validate that we have all required variables
-    if not api_key_id or not provider or not model:
-        raise HTTPException(500, f"Failed to initialize provider. api_key_id={api_key_id}, provider={provider}, model={model}")
+    # Validate
+    if not api_key_id or not provider:
+        raise HTTPException(500, f"Failed to initialize provider. api_key_id={api_key_id}, provider={provider}")
     
-    # Map aspect ratio from old format
+    # Aspect ratio: keep enum for Whisk API; map to landscape/portrait/square for metadata and other providers
     aspect_ratio_old = body.get("aspect_ratio", "IMAGE_ASPECT_RATIO_LANDSCAPE")
+    if aspect_ratio_old not in ("IMAGE_ASPECT_RATIO_PORTRAIT", "IMAGE_ASPECT_RATIO_LANDSCAPE", "IMAGE_ASPECT_RATIO_SQUARE"):
+        aspect_ratio_old = "IMAGE_ASPECT_RATIO_LANDSCAPE"
     if aspect_ratio_old == "IMAGE_ASPECT_RATIO_LANDSCAPE":
         aspect_ratio = "landscape"
     elif aspect_ratio_old == "IMAGE_ASPECT_RATIO_PORTRAIT":
         aspect_ratio = "portrait"
-    elif aspect_ratio_old == "IMAGE_ASPECT_RATIO_SQUARE":
-        aspect_ratio = "square"
     else:
-        aspect_ratio = "landscape"  # default
+        aspect_ratio = "square"
     
     seed = body.get("seed")
     num_images = body.get("num_images", 1)
@@ -4780,6 +4778,7 @@ async def image_generate(
             "type": "image",
             "provider": provider,
             "aspect_ratio": aspect_ratio,
+            "aspect_ratio_enum": aspect_ratio_old,
             "model": model,
             "model_old": model_old,
             "seed": seed,
@@ -4827,8 +4826,8 @@ async def image_generate(
                 raise HTTPException(500, "VoidAI API key not available")
             if is_naga and not naga_api_key:
                 raise HTTPException(500, "Naga API key not available")
-            if not is_voidai and not is_naga and not imaginator_api_key:
-                raise HTTPException(500, "Imaginator API key not available")
+            if is_whisk and not whisk_api_key:
+                raise HTTPException(500, "Whisk API key not available")
             
             await rate_limiter.acquire_concurrent(api_key_id, user["id"])
             
@@ -5197,136 +5196,74 @@ async def image_generate(
                 }
                 return out
             else:
-                # Imaginator API call
-                imaginator_payload = {
+                # Google Whisk API (Imagen 4): POST /api/v4/whisk/image/generate → operation_id, then poll /api/v4/operations/{operation_id}
+                whisk_payload = {
                     "prompt": prompt,
-                    "model": model,
-                    "aspect_ratio": aspect_ratio
+                    "aspect_ratio": aspect_ratio_old,
                 }
-                
-                if seed:
-                    imaginator_payload["seed"] = seed
-                
-                _debug_log(f"[IMAGE] Requesting Imaginator API: {IMAGINATOR_API_BASE}/generate_image")
-                _debug_log(f"[IMAGE] Payload: {_json_dumps(imaginator_payload)}")
-                _debug_log(f"[IMAGE] API Key (first 10 chars): {imaginator_api_key[:10]}...")
-                
+                if seed is not None:
+                    whisk_payload["seed"] = seed
+                whisk_headers = {"Content-Type": "application/json"}
+                if whisk_api_key:
+                    whisk_headers["Authorization"] = f"Bearer {whisk_api_key}"
+                _debug_log(f"[IMAGE] Requesting Whisk API: {WHISK_API_BASE}/api/v4/whisk/image/generate")
                 async with httpx.AsyncClient(timeout=120) as client:
                     try:
-                        # Create task in Imaginator API
                         response = await client.post(
-                            f"{IMAGINATOR_API_BASE}/generate_image",
-                            headers={
-                                "X-API-Key": imaginator_api_key,
-                                "Content-Type": "application/json"
-                            },
-                            json=imaginator_payload
+                            f"{WHISK_API_BASE}/api/v4/whisk/image/generate",
+                            headers=whisk_headers,
+                            json=whisk_payload,
                         )
-                        
                         response_text = response.text
-                        _debug_log(f"[IMAGE] Imaginator API response status: {response.status_code}")
-                        _debug_log(f"[IMAGE] Imaginator API response body (first 1000 chars): {response_text[:1000]}")
-                        
+                        _debug_log(f"[IMAGE] Whisk API response status: {response.status_code}, body: {response_text[:500]}")
                         if response.status_code not in [200, 201]:
                             await rate_limiter.release_concurrent(api_key_id, user["id"])
-                            
-                            error_msg = f"Imaginator API error: {response.status_code}"
                             try:
-                                error_data = response.json()
-                                _debug_log(f"[IMAGE] Error response JSON: {_json_dumps(error_data)}")
-                                if "error" in error_data:
-                                    error_info = error_data["error"]
-                                    if isinstance(error_info, dict):
-                                        error_msg = error_info.get("message", error_msg)
-                                    else:
-                                        error_msg = str(error_info)
-                                elif "message" in error_data:
-                                    error_msg = error_data.get("message", error_msg)
-                            except Exception as parse_err:
-                                _debug_log(f"[IMAGE] Failed to parse error response: {parse_err}")
-                                error_msg = f"Imaginator API error {response.status_code}: {response_text[:500]}"
-                            
+                                err_j = response.json()
+                                error_msg = err_j.get("detail", err_j.get("message", response_text)) or response_text
+                                if isinstance(error_msg, list):
+                                    error_msg = error_msg[0].get("msg", str(error_msg)) if error_msg else response_text
+                            except Exception:
+                                error_msg = response_text[:500] or f"Whisk API error: {response.status_code}"
                             con2 = db_conn()
                             try:
-                                con2.execute(
-                                    "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?",
-                                    (error_msg, task_id)
-                                )
+                                con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
                                 con2.commit()
-                                log_event("info", "task_failed", f"Task {task_id} marked as failed due to API error: {error_msg}", user_id=user["id"])
                             finally:
                                 con2.close()
-                            
                             raise HTTPException(response.status_code, error_msg)
-                        
                         result = response.json()
-                        _debug_log(f"[IMAGE] Imaginator API result keys: {list(result.keys())}")
-                        
-                        # Extract task_id from Imaginator response
-                        if not result.get("success"):
+                        operation_id = result.get("operation_id")
+                        if not operation_id:
                             await rate_limiter.release_concurrent(api_key_id, user["id"])
-                            error_msg = "Imaginator API returned unsuccessful response"
+                            error_msg = "No operation_id in Whisk API response"
                             con2 = db_conn()
                             try:
-                                con2.execute(
-                                    "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?",
-                                    (error_msg, task_id)
-                                )
+                                con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
                                 con2.commit()
-                                log_event("info", "task_failed", f"Task {task_id} marked as failed: {error_msg}", user_id=user["id"])
                             finally:
                                 con2.close()
                             raise HTTPException(500, error_msg)
-                        
-                        imaginator_task_id = result.get("data", {}).get("task_id")
-                        if not imaginator_task_id:
-                            await rate_limiter.release_concurrent(api_key_id, user["id"])
-                            error_msg = "No task_id in Imaginator API response"
-                            con2 = db_conn()
-                            try:
-                                con2.execute(
-                                    "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?",
-                                    (error_msg, task_id)
-                                )
-                                con2.commit()
-                                log_event("info", "task_failed", f"Task {task_id} marked as failed: {error_msg}", user_id=user["id"])
-                            finally:
-                                con2.close()
-                            raise HTTPException(500, error_msg)
-                        
-                        # Update metadata with imaginator_task_id
-                        metadata["imaginator_task_id"] = imaginator_task_id
+                        metadata["whisk_operation_id"] = operation_id
                         con2 = db_conn()
                         try:
-                            con2.execute(
-                                "UPDATE jobs SET metadata_json = ? WHERE id = ?",
-                                (_json_dumps(metadata), task_id)
-                            )
+                            con2.execute("UPDATE jobs SET metadata_json = ? WHERE id = ?", (_json_dumps(metadata), task_id))
                             con2.commit()
                         finally:
                             con2.close()
-                        
-                        _debug_log(f"[IMAGE] Task created in Imaginator: {imaginator_task_id}, our task_id: {task_id}")
-                        # Task is now processing, will be polled via /api/image/status endpoint
+                        _debug_log(f"[IMAGE] Whisk operation_id: {operation_id}, task_id: {task_id}")
                     except HTTPException:
                         raise
                     except Exception as parse_error:
-                        _debug_log(f"[IMAGE] Error parsing response: {parse_error}")
-                        import traceback
-                        traceback.print_exc()
+                        _debug_log(f"[IMAGE] Whisk request error: {parse_error}")
                         await rate_limiter.release_concurrent(api_key_id, user["id"])
-                        error_msg = f"Failed to parse Imaginator API response: {str(parse_error)}"
                         con2 = db_conn()
                         try:
-                            con2.execute(
-                                "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?",
-                                (error_msg, task_id)
-                            )
+                            con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (str(parse_error), task_id))
                             con2.commit()
-                            log_event("info", "task_failed", f"Task {task_id} marked as failed: {error_msg}", user_id=user["id"])
                         finally:
                             con2.close()
-                        raise HTTPException(500, error_msg)
+                        raise HTTPException(500, str(parse_error))
         except HTTPException:
             raise
         except Exception as e:
@@ -5412,76 +5349,73 @@ async def image_status(
                     "prompt": job_prompt
                 }
             
-            # Check Imaginator API for task status
-            imaginator_task_id = metadata.get("imaginator_task_id")
-            if imaginator_task_id:
-                # Get API key for Imaginator
-                key_data = get_imaginator_api_key()
-                if key_data:
-                    _, imaginator_api_key = key_data
-                    try:
-                        async with httpx.AsyncClient(timeout=30) as client:
-                            status_response = await client.get(
-                                f"{IMAGINATOR_API_BASE}/task/{imaginator_task_id}",
-                                headers={"X-API-Key": imaginator_api_key}
-                            )
-                            
-                            if status_response.status_code == 200:
-                                status_data = status_response.json()
-                                if status_data.get("success"):
-                                    task_data = status_data.get("data", {})
-                                    imaginator_status = task_data.get("status")
-                                    
-                                    if imaginator_status == "completed":
-                                        # Download image from result_url
-                                        result_url = task_data.get("result_url")
-                                        if result_url:
-                                            try:
-                                                # Download image
-                                                image_response = await httpx.AsyncClient(timeout=60).get(result_url)
-                                                if image_response.status_code == 200:
-                                                    # Save image locally
-                                                    image_path = IMAGES_DIR / f"{task_id}.png"
-                                                    with open(image_path, "wb") as f:
-                                                        f.write(image_response.content)
-                                                    
-                                                    # Convert to data URI for frontend
-                                                    image_b64 = base64.b64encode(image_response.content).decode()
-                                                    image_data_uri = f"data:image/png;base64,{image_b64}"
-                                                    
-                                                    # Update job (clear error on success)
-                                                    metadata["result"] = image_data_uri
-                                                    metadata["data_uri"] = image_data_uri
-                                                    metadata["all_images"] = [{"data_uri": image_data_uri, "url": result_url, "revised_prompt": task_data.get("revised_prompt")}]
-                                                    con.execute(
-                                                        "UPDATE jobs SET status = 'completed', error = NULL, completed_at_ms = ?, image_path = ?, metadata_json = ? WHERE id = ?",
-                                                        (now_ms(), str(image_path), _json_dumps(metadata), task_id)
-                                                    )
-                                                    con.commit()
-                                                    all_imgs = metadata.get("all_images") or [{"data_uri": image_data_uri}]
-                                                    _debug_log(f"[IMAGE] /status {task_id}: Imaginator completed, returning")
-                                                    return {
-                                                        "status": "completed",
-                                                        "result": image_data_uri,
-                                                        "data_uri": image_data_uri,
-                                                        "all_images": all_imgs,
-                                                        "progress": 100,
-                                                        "prompt": job_prompt
-                                                    }
-                                            except Exception as e:
-                                                _debug_log(f"[IMAGE] Error downloading image: {e}")
-                                    elif imaginator_status == "failed":
-                                        error_msg = task_data.get("error_message", "Generation failed")
-                                        con.execute(
-                                            "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?",
-                                            (error_msg, task_id)
-                                        )
-                                        con.commit()
-                                        return {"status": "failed", "error": error_msg, "progress": 0, "prompt": job_prompt}
-                                    elif imaginator_status in ["pending", "processing"]:
-                                        return {"status": "processing", "progress": 50}
-                    except Exception as e:
-                        _debug_log(f"[IMAGE] Error checking Imaginator status: {e}")
+            # Poll Google Whisk API: GET /api/v4/operations/{operation_id}
+            whisk_operation_id = metadata.get("whisk_operation_id")
+            if whisk_operation_id and WHISK_API_BASE:
+                key_data = get_whisk_api_key()
+                whisk_key = key_data[1] if key_data else None
+                try:
+                    async with httpx.AsyncClient(timeout=30) as client:
+                        headers = {"Authorization": f"Bearer {whisk_key}"} if whisk_key else {}
+                        poll_response = await client.get(
+                            f"{WHISK_API_BASE}/api/v4/operations/{whisk_operation_id}",
+                            headers=headers,
+                        )
+                        if poll_response.status_code == 200:
+                            op_data = poll_response.json()
+                            op_status = op_data.get("status")
+                            if op_status == "success":
+                                result_obj = op_data.get("result") or op_data.get("output") or op_data
+                                image_data_uri = result_obj.get("data_uri") or result_obj.get("data_uri_base64")
+                                image_url = result_obj.get("image_url") or result_obj.get("url")
+                                image_b64 = result_obj.get("b64") or result_obj.get("image")
+                                if image_data_uri:
+                                    pass
+                                elif image_b64:
+                                    image_data_uri = f"data:image/png;base64,{image_b64}" if not (isinstance(image_b64, str) and image_b64.startswith("data:")) else image_b64
+                                elif image_url:
+                                    img_resp = await httpx.AsyncClient(timeout=60).get(image_url)
+                                    if img_resp.status_code == 200:
+                                        image_data_uri = f"data:image/png;base64,{base64.b64encode(img_resp.content).decode()}"
+                                    else:
+                                        image_data_uri = None
+                                else:
+                                    image_data_uri = None
+                                if image_data_uri:
+                                    _IMAGES_DIR = Path(DB_PATH).parent / "images"
+                                    _IMAGES_DIR.mkdir(exist_ok=True)
+                                    image_path = _IMAGES_DIR / f"{task_id}.png"
+                                    try:
+                                        raw = base64.b64decode(image_data_uri.split(",", 1)[-1]) if "," in image_data_uri else base64.b64decode(image_data_uri)
+                                        with open(image_path, "wb") as f:
+                                            f.write(raw)
+                                    except Exception:
+                                        image_path = None
+                                    metadata["result"] = image_data_uri
+                                    metadata["data_uri"] = image_data_uri
+                                    metadata["all_images"] = [{"data_uri": image_data_uri}]
+                                    con.execute(
+                                        "UPDATE jobs SET status = 'completed', error = NULL, completed_at_ms = ?, image_path = ?, metadata_json = ? WHERE id = ?",
+                                        (now_ms(), str(image_path) if image_path else None, _json_dumps(metadata), task_id),
+                                    )
+                                    con.commit()
+                                    return {
+                                        "status": "completed",
+                                        "result": image_data_uri,
+                                        "data_uri": image_data_uri,
+                                        "all_images": metadata.get("all_images", []),
+                                        "progress": 100,
+                                        "prompt": job_prompt,
+                                    }
+                            elif op_status == "failed":
+                                error_msg = op_data.get("error") or op_data.get("message") or "Generation failed"
+                                if isinstance(error_msg, dict):
+                                    error_msg = error_msg.get("message", str(error_msg))
+                                con.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
+                                con.commit()
+                                return {"status": "failed", "error": error_msg, "progress": 0, "prompt": job_prompt}
+                except Exception as e:
+                    _debug_log(f"[IMAGE] Error polling Whisk operation: {e}")
             
             # Still processing
             return {"status": "processing", "progress": 50}
@@ -5596,60 +5530,61 @@ async def image_status(
                     all_imgs = [{"data_uri": p["data_uri"], "url": p.get("url")} for p in processed]
                     return {"status": "completed", "result": primary["data_uri"], "data_uri": primary["data_uri"], "all_images": all_imgs, "progress": 100, "prompt": (prompt or "")[:500]}
 
-                model = metadata.get("model", "imagen3.5")
+                # Queued Whisk (Imagen 4) task: start via Whisk API
+                is_whisk_queued = metadata.get("provider") == "whisk"
+                aspect_ratio_enum = metadata.get("aspect_ratio_enum") or (
+                    "IMAGE_ASPECT_RATIO_LANDSCAPE" if aspect_ratio == "landscape" else
+                    "IMAGE_ASPECT_RATIO_PORTRAIT" if aspect_ratio == "portrait" else
+                    "IMAGE_ASPECT_RATIO_SQUARE"
+                )
                 seed = metadata.get("seed")
-                key_data = get_imaginator_api_key()
-                if not key_data:
-                    position = con.execute(
-                        f"""SELECT COUNT(*) as pos FROM jobs WHERE user_id = ? AND status = 'queued' AND {image_filter}
-                            AND created_at_ms < ?""",
-                        (user["id"], job["created_at_ms"])
-                    ).fetchone()["pos"]
-                    _debug_log(f"[IMAGE] Queued {task_id}: no Imaginator API key, staying queued")
-                    return {"status": "queued", "progress": 0, "queue_position": position + 1}
-
-                api_key_id, imaginator_api_key = key_data
-                try:
-                    await rate_limiter.acquire_concurrent(api_key_id, user["id"])
-                    imaginator_payload = {"prompt": prompt, "model": model, "aspect_ratio": aspect_ratio}
-                    if seed:
-                        imaginator_payload["seed"] = seed
-
-                    async with httpx.AsyncClient(timeout=120) as client:
-                        response = await client.post(
-                            f"{IMAGINATOR_API_BASE}/generate_image",
-                            headers={"X-API-Key": imaginator_api_key, "Content-Type": "application/json"},
-                            json=imaginator_payload
-                        )
-
-                    if response.status_code in [200, 201]:
-                        result = response.json()
-                        if result.get("success"):
-                            imaginator_task_id = result.get("data", {}).get("task_id")
-                            if imaginator_task_id:
-                                metadata["imaginator_task_id"] = imaginator_task_id
+                if is_whisk_queued and WHISK_API_BASE:
+                    key_data = get_whisk_api_key()
+                    if not key_data:
+                        position = con.execute(
+                            f"""SELECT COUNT(*) as pos FROM jobs WHERE user_id = ? AND status = 'queued' AND {image_filter}
+                                AND created_at_ms < ?""",
+                            (user["id"], job["created_at_ms"])
+                        ).fetchone()["pos"]
+                        return {"status": "queued", "progress": 0, "queue_position": position + 1}
+                    api_key_id, whisk_api_key = key_data
+                    try:
+                        await rate_limiter.acquire_concurrent(api_key_id, user["id"])
+                        whisk_payload = {"prompt": prompt, "aspect_ratio": aspect_ratio_enum}
+                        if seed is not None:
+                            whisk_payload["seed"] = seed
+                        headers = {"Content-Type": "application/json"}
+                        if whisk_api_key:
+                            headers["Authorization"] = f"Bearer {whisk_api_key}"
+                        async with httpx.AsyncClient(timeout=120) as client:
+                            response = await client.post(
+                                f"{WHISK_API_BASE}/api/v4/whisk/image/generate",
+                                headers=headers,
+                                json=whisk_payload,
+                            )
+                        if response.status_code in [200, 201]:
+                            result = response.json()
+                            operation_id = result.get("operation_id")
+                            if operation_id:
+                                metadata["whisk_operation_id"] = operation_id
                                 metadata.pop("full_prompt", None)
                                 con.execute(
                                     "UPDATE jobs SET status = 'processing', metadata_json = ? WHERE id = ?",
                                     (_json_dumps(metadata), task_id)
                                 )
                                 con.commit()
-                                _debug_log(f"[IMAGE] Queued {task_id} → processing (oldest, slot free)")
+                                _debug_log(f"[IMAGE] Queued {task_id} → processing (Whisk operation_id: {operation_id})")
                                 return {"status": "processing", "progress": 50}
-                            await rate_limiter.release_concurrent(api_key_id, user["id"])
-                            _debug_log(f"[IMAGE] Imaginator OK but no task_id for {task_id}")
-                        else:
-                            await rate_limiter.release_concurrent(api_key_id, user["id"])
-                            _debug_log(f"[IMAGE] Imaginator success=false for {task_id}")
-                    else:
                         await rate_limiter.release_concurrent(api_key_id, user["id"])
-                        _debug_log(f"[IMAGE] Error creating Imaginator task: {response.status_code} for {task_id}")
-                except Exception as e:
-                    try:
-                        await rate_limiter.release_concurrent(api_key_id, user["id"])
-                    except Exception:
-                        pass
-                    _debug_log(f"[IMAGE] Error starting queued task {task_id}: {e}")
+                    except Exception as e:
+                        try:
+                            await rate_limiter.release_concurrent(api_key_id, user["id"])
+                        except Exception:
+                            pass
+                        _debug_log(f"[IMAGE] Error starting queued Whisk task {task_id}: {e}")
+                        con.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (str(e), task_id))
+                        con.commit()
+                        return {"status": "failed", "error": str(e), "progress": 0, "prompt": (prompt or "")[:500]}
 
             position = con.execute(
                 f"""SELECT COUNT(*) as pos FROM jobs WHERE user_id = ? AND status = 'queued' AND {image_filter}

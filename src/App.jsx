@@ -2523,7 +2523,7 @@ function VoiceLibraryTab({ showToast }) {
 function ImageGenerationTab({ user, refreshUser, showToast }) {
   const [prompt, setPrompt] = useState(() => localStorage.getItem('ff_image_prompt') || '');
   const [aspectRatio, setAspectRatio] = useState(() => localStorage.getItem('ff_image_aspect_ratio') || 'IMAGE_ASPECT_RATIO_LANDSCAPE');
-  const [model, setModel] = useState(() => localStorage.getItem('ff_image_model') || 'IMAGEN_3_5');
+  const [model, setModel] = useState(() => localStorage.getItem('ff_image_model') || 'IMAGEN_4');
   const [seed, setSeed] = useState(() => localStorage.getItem('ff_image_seed') || '');
   const [numImages, setNumImages] = useState(() => parseInt(localStorage.getItem('ff_num_images'), 10) || 1);
   const [showAdvanced, setShowAdvanced] = useState(() => localStorage.getItem('ff_image_show_advanced') === 'true');
@@ -2579,9 +2579,7 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
       } catch {
         // Set defaults if API fails
         setModelPricing({
-          'IMAGEN_3_5': 1,
-          'GEM_PIX': 1,
-          'GEM_PIX_2': 2
+          'IMAGEN_4': 1
         });
       }
     };
@@ -2911,7 +2909,6 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
     for (const singlePrompt of prompts) {
       for (let i = 0; i < numImages; i++) {
         const payload = {
-          provider: 'imaginator',
           prompt: singlePrompt.trim(),
           aspect_ratio: aspectRatio,
           model: model,
@@ -3011,7 +3008,7 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
       const msg = err?.message || '';
       const is503 = /503|service unavailable|unavailable/i.test(msg);
       showToast(
-        is503 ? 'Image generation unavailable. Add Imaginator/VoidAI/Naga API keys in Admin.' : (msg || 'Generation failed'),
+        is503 ? 'Image generation unavailable. Add Whisk/VoidAI/Naga API keys in Admin.' : (msg || 'Generation failed'),
         'error'
       );
     }).finally(() => {
@@ -3138,9 +3135,7 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
               <div className="space-y-3 pt-4 border-t border-gray-100">
                 <div className="grid grid-cols-3 gap-2">
                   {[
-                    { id: 'IMAGEN_3_5', name: 'Imagen 3.5', desc: 'High quality', defaultCredits: 1 },
-                    { id: 'GEM_PIX', name: 'Nano Banana', desc: 'High quality', defaultCredits: 1 },
-                    { id: 'GEM_PIX_2', name: 'Nano Banana Pro', desc: 'High quality', defaultCredits: 2 },
+                    { id: 'IMAGEN_4', name: 'Imagen 4 (Whisk)', desc: 'Google Whisk', defaultCredits: 1 },
                     { id: 'gpt-image-1', name: 'GPT Image 1', desc: 'High quality', defaultCredits: 1 },
                     { id: 'gpt-image-1.5', name: 'GPT Image 1.5', desc: 'High quality', defaultCredits: 1 },
                     { id: 'imagen-3.0-generate-002', name: 'Imagen 3.0 (VoidAI)', desc: 'High quality', defaultCredits: 2 },
@@ -5422,14 +5417,14 @@ function AdminPanelPage({ showToast, onLogout }) {
                           <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded ${
                             k.provider === 'elevenlabs' 
                               ? 'bg-purple-100 text-purple-700' 
-                              : (k.provider === 'imaginator' || k.provider === 'fast_api' || k.provider === 'voidai' || k.provider === 'naga')
+                              : (k.provider === 'whisk' || k.provider === 'voidai' || k.provider === 'naga')
                               ? 'bg-emerald-100 text-emerald-700'
                               : 'bg-blue-100 text-blue-700'
                           }`}>
                             {k.provider === 'elevenlabs' 
                               ? 'ElevenLabs' 
-                              : (k.provider === 'imaginator' || k.provider === 'fast_api') 
-                              ? 'Imaginator API' 
+                              : (k.provider === 'whisk')
+                              ? 'Whisk API (Imagen 4)'
                               : k.provider === 'voidai'
                               ? 'VoidAI API'
                               : k.provider === 'naga'
@@ -5446,7 +5441,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                     </div>
                     
                     {/* Concurrent Slots - Only for Voicer */}
-                    {k.provider !== 'elevenlabs' && k.provider !== 'imaginator' && k.provider !== 'fast_api' && k.provider !== 'voidai' && k.provider !== 'naga' && (
+                    {k.provider !== 'elevenlabs' && k.provider !== 'whisk' && k.provider !== 'voidai' && k.provider !== 'naga' && (
                       <div className="mb-4">
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs text-gray-500">Concurrent Slots</span>
@@ -5475,7 +5470,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                         <p className="text-xs text-purple-700">Used for Voice Library browsing</p>
                       </div>
                     )}
-                    {(k.provider === 'imaginator' || k.provider === 'fast_api' || k.provider === 'voidai' || k.provider === 'naga') && (
+                    {(k.provider === 'whisk' || k.provider === 'voidai' || k.provider === 'naga') && (
                       <div className="mb-4 p-2 bg-emerald-50 rounded-lg">
                         <p className="text-xs text-emerald-700">
                           {k.provider === 'voidai' ? 'Used for VoidAI Image Generation' : k.provider === 'naga' ? 'Used for Naga Image Generation' : 'Used for Image Generation'}
@@ -5487,7 +5482,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                       <span>
                         {k.provider === 'elevenlabs' 
                           ? 'Library access only' 
-                          : (k.provider === 'imaginator' || k.provider === 'fast_api' || k.provider === 'voidai' || k.provider === 'naga') 
+                          : (k.provider === 'whisk' || k.provider === 'voidai' || k.provider === 'naga') 
                           ? `${k.total_requests || 0} image generations` 
                           : `${k.total_requests || 0} total requests`
                         }
@@ -5543,16 +5538,16 @@ function AdminPanelPage({ showToast, onLogout }) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setNewKeyData({ ...newKeyData, provider: 'imaginator' })}
+                  onClick={() => setNewKeyData({ ...newKeyData, provider: 'whisk' })}
                   className={`p-4 rounded-xl border-2 transition-all text-left ${
-                    newKeyData.provider === 'imaginator' 
+                    newKeyData.provider === 'whisk' 
                       ? 'border-black bg-gray-50' 
                       : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <Image className="w-4 h-4" />
-                    <span className="font-medium text-sm">Imaginator API</span>
+                    <span className="font-medium text-sm">Whisk API (Imagen 4)</span>
                   </div>
                   <p className="text-xs text-gray-500">Image generation</p>
                 </button>
@@ -5592,7 +5587,7 @@ function AdminPanelPage({ showToast, onLogout }) {
               label="Name" 
               placeholder={
                 newKeyData.provider === 'voicer' ? 'My Voicer Key' : 
-                (newKeyData.provider === 'imaginator' || newKeyData.provider === 'fast_api') ? 'My Imaginator API Key' : 
+                newKeyData.provider === 'whisk' ? 'My Whisk API Key' : 
                 newKeyData.provider === 'voidai' ? 'My VoidAI API Key' : 
                 newKeyData.provider === 'naga' ? 'My Naga API Key' : 
                 'My ElevenLabs Key'
@@ -5604,7 +5599,7 @@ function AdminPanelPage({ showToast, onLogout }) {
               label="API Key" 
               placeholder={
                 newKeyData.provider === 'voicer' ? 'Enter Voicer API key...' : 
-                (newKeyData.provider === 'imaginator' || newKeyData.provider === 'fast_api') ? 'Enter Imaginator API key...' : 
+                newKeyData.provider === 'whisk' ? 'Enter Whisk API key...' : 
                 newKeyData.provider === 'voidai' ? 'Enter VoidAI API key (sk-voidai-...)...' : 
                 newKeyData.provider === 'naga' ? 'Enter Naga API key...' : 
                 'Enter ElevenLabs API key...'
@@ -5638,9 +5633,7 @@ function AdminPanelPage({ showToast, onLogout }) {
             <Card className="p-6">
               <div className="space-y-4">
                 {[
-                  { id: 'IMAGEN_3_5', name: 'Imagen 3.5', model: 'imagen3.5', defaultCredits: 1 },
-                  { id: 'GEM_PIX', name: 'GEM_PIX (Nano Banana)', model: 'nano_banana', defaultCredits: 1 },
-                  { id: 'GEM_PIX_2', name: 'GEM_PIX_2 (Nano Banana Pro)', model: 'nano_banana_pro', defaultCredits: 2 },
+                  { id: 'IMAGEN_4', name: 'Imagen 4 (Google Whisk)', model: 'imagen4', defaultCredits: 1 },
                   { id: 'gpt-image-1', name: 'GPT Image 1 (VoidAI)', model: 'gpt-image-1', defaultCredits: 1 },
                   { id: 'gpt-image-1.5', name: 'GPT Image 1.5 (VoidAI)', model: 'gpt-image-1.5', defaultCredits: 1 },
                   { id: 'imagen-3.0-generate-002', name: 'Imagen 3.0 (VoidAI)', model: 'imagen-3.0-generate-002', defaultCredits: 2 },
