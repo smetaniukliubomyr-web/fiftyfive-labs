@@ -380,7 +380,11 @@ def init_db():
     
     # Initialize default pricing if table is empty (all image generation models)
     default_pricing = [
-        ('IMAGEN_4', 1),  # Google Whisk (Imagen 4)
+        ('IMAGEN_4', 1),
+        ('GEM_PIX', 1),
+        ('GEM_PIX_2', 2),
+        ('IMAGEN_3_5', 1),
+        ('GROK', 1),
         ('gpt-image-1', 1),
         ('gpt-image-1.5', 1),
         ('imagen-3.0-generate-002', 2),
@@ -4579,7 +4583,11 @@ async def ensure_audio_downloaded(task_id: str, voicer_key: str) -> Optional[str
 # Image Generation Endpoints (Google Whisk API / Imagen 4 + VoidAI + Naga)
 # =============================================================================
 
-WHISK_API_BASE = os.getenv("WHISK_API_BASE", "").rstrip("/")  # e.g. https://your-whisk-api.example.com
+WHISK_API_BASE = os.getenv("WHISK_API_BASE", "").rstrip("/")  # media_gen_api base (Whisk, Flow, Grok)
+
+# Same API base/key: Flow (Nano, Nano Pro, Imagen 3.5) and Grok
+FLOW_MODELS = ["GEM_PIX", "GEM_PIX_2", "IMAGEN_3_5"]  # POST /api/v4/flow/image/generate
+GROK_MODEL = "GROK"  # POST /api/v4/grok/image/generate (returns 4 images)
 
 VOIDAI_API_BASE = os.getenv("VOIDAI_API_BASE", "https://api.voidai.app/v1")
 VOIDAI_MODELS = [
@@ -4663,12 +4671,14 @@ async def image_generate(
     # Map model from frontend
     model_old = body.get("model", "IMAGEN_4")
     
-    # Determine provider based on model
+    # Determine provider based on model (same API base for Whisk, Flow, Grok)
     is_whisk = model_old == "IMAGEN_4"
+    is_flow = model_old in FLOW_MODELS
+    is_grok = model_old == GROK_MODEL
     is_voidai = model_old in VOIDAI_MODELS
     is_naga = model_old in NAGA_MODELS
     
-    _debug_log(f"[IMAGE] Model received: {model_old}, is_whisk: {is_whisk}, is_voidai: {is_voidai}, is_naga: {is_naga}")
+    _debug_log(f"[IMAGE] Model received: {model_old}, is_whisk: {is_whisk}, is_flow: {is_flow}, is_grok: {is_grok}, is_voidai: {is_voidai}, is_naga: {is_naga}")
     
     # Initialize variables
     api_key_id = None
@@ -4680,13 +4690,31 @@ async def image_generate(
     
     if is_whisk:
         if not WHISK_API_BASE:
-            raise HTTPException(503, "Whisk API base URL not configured. Set WHISK_API_BASE in environment or add a Whisk API key in the admin panel.")
+            raise HTTPException(503, "Whisk/Flow/Grok API base not configured. Set WHISK_API_BASE.")
         key_data = get_whisk_api_key()
         if not key_data:
-            raise HTTPException(503, "No Whisk (Google Imagen 4) API keys configured. Add a Whisk API key in the admin panel or set WHISK_API_KEY.")
+            raise HTTPException(503, "No Whisk/Flow/Grok API key. Add a Whisk API key in admin or set WHISK_API_KEY.")
         api_key_id, whisk_api_key = key_data
         provider = "whisk"
         model = "imagen4"
+    elif is_flow:
+        if not WHISK_API_BASE:
+            raise HTTPException(503, "Whisk/Flow/Grok API base not configured. Set WHISK_API_BASE.")
+        key_data = get_whisk_api_key()
+        if not key_data:
+            raise HTTPException(503, "No Whisk/Flow/Grok API key. Add a Whisk API key in admin or set WHISK_API_KEY.")
+        api_key_id, whisk_api_key = key_data
+        provider = "flow"
+        model = model_old  # GEM_PIX, GEM_PIX_2, IMAGEN_3_5
+    elif is_grok:
+        if not WHISK_API_BASE:
+            raise HTTPException(503, "Whisk/Flow/Grok API base not configured. Set WHISK_API_BASE.")
+        key_data = get_whisk_api_key()
+        if not key_data:
+            raise HTTPException(503, "No Whisk/Flow/Grok API key. Add a Whisk API key in admin or set WHISK_API_KEY.")
+        api_key_id, whisk_api_key = key_data
+        provider = "grok"
+        model = "grok"
     elif is_voidai:
         key_data = get_voidai_api_key()
         if not key_data:
@@ -4702,7 +4730,7 @@ async def image_generate(
         model = NAGA_MODEL_MAP.get(model_old, "flux-1-schnell:free")
         provider = "naga"
     else:
-        raise HTTPException(400, f"Unknown model: {model_old}. Use IMAGEN_4 (Whisk), VoidAI or Naga models.")
+        raise HTTPException(400, f"Unknown model: {model_old}. Use IMAGEN_4, GEM_PIX, GEM_PIX_2, IMAGEN_3_5, GROK, VoidAI or Naga models.")
     
     # Validate
     if not api_key_id or not provider:
@@ -4826,8 +4854,8 @@ async def image_generate(
                 raise HTTPException(500, "VoidAI API key not available")
             if is_naga and not naga_api_key:
                 raise HTTPException(500, "Naga API key not available")
-            if is_whisk and not whisk_api_key:
-                raise HTTPException(500, "Whisk API key not available")
+            if (is_whisk or is_flow or is_grok) and not whisk_api_key:
+                raise HTTPException(500, "Whisk/Flow/Grok API key not available")
             
             await rate_limiter.acquire_concurrent(api_key_id, user["id"])
             
@@ -5195,8 +5223,137 @@ async def image_generate(
                     "prompt": (prompt or "")[:500],
                 }
                 return out
+            elif is_flow:
+                # POST /api/v4/flow/image/generate - Flow: GEM_PIX, GEM_PIX_2, IMAGEN_3_5 (aspect_ratio PORTRAIT or LANDSCAPE only)
+                flow_ar = aspect_ratio_old if aspect_ratio_old in ("IMAGE_ASPECT_RATIO_PORTRAIT", "IMAGE_ASPECT_RATIO_LANDSCAPE") else "IMAGE_ASPECT_RATIO_LANDSCAPE"
+                flow_payload = {"prompt": prompt, "aspect_ratio": flow_ar, "model": model}
+                if seed is not None:
+                    flow_payload["seed"] = seed
+                whisk_headers = {"Content-Type": "application/json"}
+                if whisk_api_key:
+                    whisk_headers["X-API-Key"] = whisk_api_key
+                _debug_log(f"[IMAGE] Requesting Flow API: {WHISK_API_BASE}/api/v4/flow/image/generate")
+                async with httpx.AsyncClient(timeout=120) as client:
+                    try:
+                        response = await client.post(
+                            f"{WHISK_API_BASE}/api/v4/flow/image/generate",
+                            headers=whisk_headers,
+                            json=flow_payload,
+                        )
+                        response_text = response.text
+                        _debug_log(f"[IMAGE] Flow API response: {response.status_code}, body: {response_text[:500]}")
+                        if response.status_code not in [200, 201]:
+                            await rate_limiter.release_concurrent(api_key_id, user["id"])
+                            try:
+                                err_j = response.json()
+                                error_msg = err_j.get("detail", err_j.get("message", response_text)) or response_text
+                                if isinstance(error_msg, list):
+                                    error_msg = error_msg[0].get("msg", str(error_msg)) if error_msg else response_text
+                            except Exception:
+                                error_msg = response_text[:500] or f"Flow API error: {response.status_code}"
+                            con2 = db_conn()
+                            try:
+                                con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
+                                con2.commit()
+                            finally:
+                                con2.close()
+                            raise HTTPException(response.status_code, error_msg)
+                        result = response.json()
+                        operation_id = result.get("operation_id")
+                        if not operation_id:
+                            await rate_limiter.release_concurrent(api_key_id, user["id"])
+                            con2 = db_conn()
+                            try:
+                                con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", ("No operation_id in Flow response", task_id))
+                                con2.commit()
+                            finally:
+                                con2.close()
+                            raise HTTPException(500, "No operation_id in Flow API response")
+                        metadata["whisk_operation_id"] = operation_id
+                        con2 = db_conn()
+                        try:
+                            con2.execute("UPDATE jobs SET metadata_json = ? WHERE id = ?", (_json_dumps(metadata), task_id))
+                            con2.commit()
+                        finally:
+                            con2.close()
+                        _debug_log(f"[IMAGE] Flow operation_id: {operation_id}")
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        await rate_limiter.release_concurrent(api_key_id, user["id"])
+                        con2 = db_conn()
+                        try:
+                            con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (str(e), task_id))
+                            con2.commit()
+                        finally:
+                            con2.close()
+                        raise HTTPException(500, str(e))
+            elif is_grok:
+                # POST /api/v4/grok/image/generate - returns 4 images; aspect_ratio: 1:1, 2:3, 3:2, 9:16, 16:9
+                grok_ar_map = {"landscape": "16:9", "portrait": "9:16", "square": "1:1"}
+                grok_ar = grok_ar_map.get(aspect_ratio, "3:2")
+                grok_payload = {"prompt": prompt, "aspect_ratio": grok_ar}
+                whisk_headers = {"Content-Type": "application/json"}
+                if whisk_api_key:
+                    whisk_headers["X-API-Key"] = whisk_api_key
+                _debug_log(f"[IMAGE] Requesting Grok API: {WHISK_API_BASE}/api/v4/grok/image/generate")
+                async with httpx.AsyncClient(timeout=120) as client:
+                    try:
+                        response = await client.post(
+                            f"{WHISK_API_BASE}/api/v4/grok/image/generate",
+                            headers=whisk_headers,
+                            json=grok_payload,
+                        )
+                        response_text = response.text
+                        _debug_log(f"[IMAGE] Grok API response: {response.status_code}, body: {response_text[:500]}")
+                        if response.status_code not in [200, 201]:
+                            await rate_limiter.release_concurrent(api_key_id, user["id"])
+                            try:
+                                err_j = response.json()
+                                error_msg = err_j.get("detail", err_j.get("message", response_text)) or response_text
+                                if isinstance(error_msg, list):
+                                    error_msg = error_msg[0].get("msg", str(error_msg)) if error_msg else response_text
+                            except Exception:
+                                error_msg = response_text[:500] or f"Grok API error: {response.status_code}"
+                            con2 = db_conn()
+                            try:
+                                con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (error_msg, task_id))
+                                con2.commit()
+                            finally:
+                                con2.close()
+                            raise HTTPException(response.status_code, error_msg)
+                        result = response.json()
+                        operation_id = result.get("operation_id")
+                        if not operation_id:
+                            await rate_limiter.release_concurrent(api_key_id, user["id"])
+                            con2 = db_conn()
+                            try:
+                                con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", ("No operation_id in Grok response", task_id))
+                                con2.commit()
+                            finally:
+                                con2.close()
+                            raise HTTPException(500, "No operation_id in Grok API response")
+                        metadata["whisk_operation_id"] = operation_id
+                        con2 = db_conn()
+                        try:
+                            con2.execute("UPDATE jobs SET metadata_json = ? WHERE id = ?", (_json_dumps(metadata), task_id))
+                            con2.commit()
+                        finally:
+                            con2.close()
+                        _debug_log(f"[IMAGE] Grok operation_id: {operation_id}")
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        await rate_limiter.release_concurrent(api_key_id, user["id"])
+                        con2 = db_conn()
+                        try:
+                            con2.execute("UPDATE jobs SET status = 'failed', error = ? WHERE id = ?", (str(e), task_id))
+                            con2.commit()
+                        finally:
+                            con2.close()
+                        raise HTTPException(500, str(e))
             else:
-                # Google Whisk API (Imagen 4): POST /api/v4/whisk/image/generate → operation_id, then poll /api/v4/operations/{operation_id}
+                # Whisk (Imagen 4): POST /api/v4/whisk/image/generate
                 whisk_payload = {
                     "prompt": prompt,
                     "aspect_ratio": aspect_ratio_old,
@@ -5205,7 +5362,7 @@ async def image_generate(
                     whisk_payload["seed"] = seed
                 whisk_headers = {"Content-Type": "application/json"}
                 if whisk_api_key:
-                    whisk_headers["Authorization"] = f"Bearer {whisk_api_key}"
+                    whisk_headers["X-API-Key"] = whisk_api_key
                 _debug_log(f"[IMAGE] Requesting Whisk API: {WHISK_API_BASE}/api/v4/whisk/image/generate")
                 async with httpx.AsyncClient(timeout=120) as client:
                     try:
@@ -5356,31 +5513,34 @@ async def image_status(
                 whisk_key = key_data[1] if key_data else None
                 try:
                     async with httpx.AsyncClient(timeout=30) as client:
-                        headers = {"Authorization": f"Bearer {whisk_key}"} if whisk_key else {}
+                        headers = {"X-API-Key": whisk_key} if whisk_key else {}
                         poll_response = await client.get(
                             f"{WHISK_API_BASE}/api/v4/operations/{whisk_operation_id}",
                             headers=headers,
                         )
+                        if poll_response.status_code == 404:
+                            # Operation not found or expired (per OpenAPI)
+                            con.execute(
+                                "UPDATE jobs SET status = 'failed', error = ? WHERE id = ?",
+                                ("Operation expired or not found", task_id),
+                            )
+                            con.commit()
+                            return {"status": "failed", "error": "Operation expired or not found", "progress": 0, "prompt": job_prompt}
                         if poll_response.status_code == 200:
                             op_data = poll_response.json()
                             op_status = op_data.get("status")
                             if op_status == "success":
-                                result_obj = op_data.get("result") or op_data.get("output") or op_data
-                                image_data_uri = result_obj.get("data_uri") or result_obj.get("data_uri_base64")
-                                image_url = result_obj.get("image_url") or result_obj.get("url")
-                                image_b64 = result_obj.get("b64") or result_obj.get("image")
-                                if image_data_uri:
-                                    pass
-                                elif image_b64:
-                                    image_data_uri = f"data:image/png;base64,{image_b64}" if not (isinstance(image_b64, str) and image_b64.startswith("data:")) else image_b64
-                                elif image_url:
-                                    img_resp = await httpx.AsyncClient(timeout=60).get(image_url)
-                                    if img_resp.status_code == 200:
-                                        image_data_uri = f"data:image/png;base64,{base64.b64encode(img_resp.content).decode()}"
-                                    else:
-                                        image_data_uri = None
+                                # Per OpenAPI: result is "List of results" (array of strings, e.g. data URIs). Grok returns 4.
+                                raw_result = op_data.get("result")
+                                if isinstance(raw_result, list) and len(raw_result) > 0:
+                                    image_data_uri = raw_result[0]
+                                    all_uris = raw_result
+                                elif isinstance(raw_result, str):
+                                    image_data_uri = raw_result
+                                    all_uris = [raw_result]
                                 else:
                                     image_data_uri = None
+                                    all_uris = []
                                 if image_data_uri:
                                     _IMAGES_DIR = Path(DB_PATH).parent / "images"
                                     _IMAGES_DIR.mkdir(exist_ok=True)
@@ -5393,7 +5553,7 @@ async def image_status(
                                         image_path = None
                                     metadata["result"] = image_data_uri
                                     metadata["data_uri"] = image_data_uri
-                                    metadata["all_images"] = [{"data_uri": image_data_uri}]
+                                    metadata["all_images"] = [{"data_uri": u} for u in all_uris]
                                     con.execute(
                                         "UPDATE jobs SET status = 'completed', error = NULL, completed_at_ms = ?, image_path = ?, metadata_json = ? WHERE id = ?",
                                         (now_ms(), str(image_path) if image_path else None, _json_dumps(metadata), task_id),
@@ -5407,7 +5567,7 @@ async def image_status(
                                         "progress": 100,
                                         "prompt": job_prompt,
                                     }
-                            elif op_status == "failed":
+                            elif op_status == "error":
                                 error_msg = op_data.get("error") or op_data.get("message") or "Generation failed"
                                 if isinstance(error_msg, dict):
                                     error_msg = error_msg.get("message", str(error_msg))
@@ -5530,15 +5690,18 @@ async def image_status(
                     all_imgs = [{"data_uri": p["data_uri"], "url": p.get("url")} for p in processed]
                     return {"status": "completed", "result": primary["data_uri"], "data_uri": primary["data_uri"], "all_images": all_imgs, "progress": 100, "prompt": (prompt or "")[:500]}
 
-                # Queued Whisk (Imagen 4) task: start via Whisk API
+                # Queued Whisk / Flow / Grok: start via same API base
                 is_whisk_queued = metadata.get("provider") == "whisk"
+                is_flow_queued = metadata.get("provider") == "flow"
+                is_grok_queued = metadata.get("provider") == "grok"
                 aspect_ratio_enum = metadata.get("aspect_ratio_enum") or (
                     "IMAGE_ASPECT_RATIO_LANDSCAPE" if aspect_ratio == "landscape" else
                     "IMAGE_ASPECT_RATIO_PORTRAIT" if aspect_ratio == "portrait" else
                     "IMAGE_ASPECT_RATIO_SQUARE"
                 )
                 seed = metadata.get("seed")
-                if is_whisk_queued and WHISK_API_BASE:
+                model_queued = metadata.get("model_old")
+                if (is_whisk_queued or is_flow_queued or is_grok_queued) and WHISK_API_BASE:
                     key_data = get_whisk_api_key()
                     if not key_data:
                         position = con.execute(
@@ -5550,18 +5713,26 @@ async def image_status(
                     api_key_id, whisk_api_key = key_data
                     try:
                         await rate_limiter.acquire_concurrent(api_key_id, user["id"])
-                        whisk_payload = {"prompt": prompt, "aspect_ratio": aspect_ratio_enum}
-                        if seed is not None:
-                            whisk_payload["seed"] = seed
                         headers = {"Content-Type": "application/json"}
                         if whisk_api_key:
-                            headers["Authorization"] = f"Bearer {whisk_api_key}"
+                            headers["X-API-Key"] = whisk_api_key
+                        if is_flow_queued:
+                            flow_ar = aspect_ratio_enum if aspect_ratio_enum in ("IMAGE_ASPECT_RATIO_PORTRAIT", "IMAGE_ASPECT_RATIO_LANDSCAPE") else "IMAGE_ASPECT_RATIO_LANDSCAPE"
+                            payload = {"prompt": prompt, "aspect_ratio": flow_ar, "model": model_queued or "GEM_PIX_2"}
+                            if seed is not None:
+                                payload["seed"] = seed
+                            url = f"{WHISK_API_BASE}/api/v4/flow/image/generate"
+                        elif is_grok_queued:
+                            grok_ar = {"landscape": "16:9", "portrait": "9:16", "square": "1:1"}.get(aspect_ratio, "3:2")
+                            payload = {"prompt": prompt, "aspect_ratio": grok_ar}
+                            url = f"{WHISK_API_BASE}/api/v4/grok/image/generate"
+                        else:
+                            payload = {"prompt": prompt, "aspect_ratio": aspect_ratio_enum}
+                            if seed is not None:
+                                payload["seed"] = seed
+                            url = f"{WHISK_API_BASE}/api/v4/whisk/image/generate"
                         async with httpx.AsyncClient(timeout=120) as client:
-                            response = await client.post(
-                                f"{WHISK_API_BASE}/api/v4/whisk/image/generate",
-                                headers=headers,
-                                json=whisk_payload,
-                            )
+                            response = await client.post(url, headers=headers, json=payload)
                         if response.status_code in [200, 201]:
                             result = response.json()
                             operation_id = result.get("operation_id")

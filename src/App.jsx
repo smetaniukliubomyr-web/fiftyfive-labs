@@ -2579,7 +2579,11 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
       } catch {
         // Set defaults if API fails
         setModelPricing({
-          'IMAGEN_4': 1
+          'IMAGEN_4': 1,
+          'GEM_PIX': 1,
+          'GEM_PIX_2': 2,
+          'IMAGEN_3_5': 1,
+          'GROK': 1
         });
       }
     };
@@ -3136,6 +3140,10 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
                 <div className="grid grid-cols-3 gap-2">
                   {[
                     { id: 'IMAGEN_4', name: 'Imagen 4 (Whisk)', desc: 'Google Whisk', defaultCredits: 1 },
+                    { id: 'GEM_PIX', name: 'Nano Banana', desc: 'Flow', defaultCredits: 1 },
+                    { id: 'GEM_PIX_2', name: 'Nano Banana Pro', desc: 'Flow', defaultCredits: 2 },
+                    { id: 'IMAGEN_3_5', name: 'Imagen 3.5', desc: 'Flow', defaultCredits: 1 },
+                    { id: 'GROK', name: 'Grok (4 images)', desc: '4 variants', defaultCredits: 1 },
                     { id: 'gpt-image-1', name: 'GPT Image 1', desc: 'High quality', defaultCredits: 1 },
                     { id: 'gpt-image-1.5', name: 'GPT Image 1.5', desc: 'High quality', defaultCredits: 1 },
                     { id: 'imagen-3.0-generate-002', name: 'Imagen 3.0 (VoidAI)', desc: 'High quality', defaultCredits: 2 },
@@ -5633,7 +5641,11 @@ function AdminPanelPage({ showToast, onLogout }) {
             <Card className="p-6">
               <div className="space-y-4">
                 {[
-                  { id: 'IMAGEN_4', name: 'Imagen 4 (Google Whisk)', model: 'imagen4', defaultCredits: 1 },
+                  { id: 'IMAGEN_4', name: 'Imagen 4 (Whisk)', model: 'imagen4', defaultCredits: 1 },
+                  { id: 'GEM_PIX', name: 'Nano Banana (Flow)', model: 'GEM_PIX', defaultCredits: 1 },
+                  { id: 'GEM_PIX_2', name: 'Nano Banana Pro (Flow)', model: 'GEM_PIX_2', defaultCredits: 2 },
+                  { id: 'IMAGEN_3_5', name: 'Imagen 3.5 (Flow)', model: 'IMAGEN_3_5', defaultCredits: 1 },
+                  { id: 'GROK', name: 'Grok (4 images)', model: 'grok', defaultCredits: 1 },
                   { id: 'gpt-image-1', name: 'GPT Image 1 (VoidAI)', model: 'gpt-image-1', defaultCredits: 1 },
                   { id: 'gpt-image-1.5', name: 'GPT Image 1.5 (VoidAI)', model: 'gpt-image-1.5', defaultCredits: 1 },
                   { id: 'imagen-3.0-generate-002', name: 'Imagen 3.0 (VoidAI)', model: 'imagen-3.0-generate-002', defaultCredits: 2 },
