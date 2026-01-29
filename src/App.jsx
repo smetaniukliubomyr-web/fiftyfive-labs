@@ -3143,6 +3143,9 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
                     { id: 'GEM_PIX_2', name: 'Nano Banana Pro', desc: 'High quality', defaultCredits: 2 },
                     { id: 'gpt-image-1', name: 'GPT Image 1', desc: 'High quality', defaultCredits: 1 },
                     { id: 'gpt-image-1.5', name: 'GPT Image 1.5', desc: 'High quality', defaultCredits: 1 },
+                    { id: 'imagen-3.0-generate-002', name: 'Imagen 3.0 (VoidAI)', desc: 'High quality', defaultCredits: 2 },
+                    { id: 'flux-kontext-pro', name: 'Flux Kontext Pro', desc: 'VoidAI', defaultCredits: 3 },
+                    { id: 'midjourney', name: 'Midjourney', desc: 'VoidAI', defaultCredits: 10 },
                     { id: 'NAGA_DALLE3', name: 'DALL·E 3', desc: 'High quality', defaultCredits: 1 },
                     { id: 'NAGA_FLUX', name: 'Flux Schnell', desc: 'Fast', defaultCredits: 1 }
                   ].map(m => {
@@ -5638,8 +5641,13 @@ function AdminPanelPage({ showToast, onLogout }) {
                   { id: 'IMAGEN_3_5', name: 'Imagen 3.5', model: 'imagen3.5', defaultCredits: 1 },
                   { id: 'GEM_PIX', name: 'GEM_PIX (Nano Banana)', model: 'nano_banana', defaultCredits: 1 },
                   { id: 'GEM_PIX_2', name: 'GEM_PIX_2 (Nano Banana Pro)', model: 'nano_banana_pro', defaultCredits: 2 },
-                  { id: 'NAGA_DALLE3', name: 'DALL·E 3', model: 'dall-e-3:free', defaultCredits: 1 },
-                  { id: 'NAGA_FLUX', name: 'Flux Schnell', model: 'flux-1-schnell:free', defaultCredits: 1 }
+                  { id: 'gpt-image-1', name: 'GPT Image 1 (VoidAI)', model: 'gpt-image-1', defaultCredits: 1 },
+                  { id: 'gpt-image-1.5', name: 'GPT Image 1.5 (VoidAI)', model: 'gpt-image-1.5', defaultCredits: 1 },
+                  { id: 'imagen-3.0-generate-002', name: 'Imagen 3.0 (VoidAI)', model: 'imagen-3.0-generate-002', defaultCredits: 2 },
+                  { id: 'flux-kontext-pro', name: 'Flux Kontext Pro (VoidAI)', model: 'flux-kontext-pro', defaultCredits: 3 },
+                  { id: 'midjourney', name: 'Midjourney (VoidAI)', model: 'midjourney', defaultCredits: 10 },
+                  { id: 'NAGA_DALLE3', name: 'DALL·E 3 (Naga)', model: 'dall-e-3:free', defaultCredits: 1 },
+                  { id: 'NAGA_FLUX', name: 'Flux Schnell (Naga)', model: 'flux-1-schnell:free', defaultCredits: 1 }
                 ].map(modelInfo => {
                   const pricing = modelPricing.find(p => p.model_id === modelInfo.id) || { 
                     model_id: modelInfo.id, 

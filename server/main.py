@@ -378,11 +378,18 @@ def init_db():
         )
     """)
     
-    # Initialize default pricing if table is empty
+    # Initialize default pricing if table is empty (all image generation models)
     default_pricing = [
         ('IMAGEN_3_5', 1),
         ('GEM_PIX', 1),
-        ('GEM_PIX_2', 2)
+        ('GEM_PIX_2', 2),
+        ('gpt-image-1', 1),
+        ('gpt-image-1.5', 1),
+        ('imagen-3.0-generate-002', 2),
+        ('flux-kontext-pro', 3),
+        ('midjourney', 10),
+        ('NAGA_DALLE3', 1),
+        ('NAGA_FLUX', 1),
     ]
     for model_id, credits in default_pricing:
         try:
@@ -4575,7 +4582,13 @@ async def ensure_audio_downloaded(task_id: str, voicer_key: str) -> Optional[str
 IMAGINATOR_API_BASE = os.getenv("IMAGINATOR_API_BASE", "https://imaginator.mat3u.com/api/v1")
 
 VOIDAI_API_BASE = os.getenv("VOIDAI_API_BASE", "https://api.voidai.app/v1")
-VOIDAI_MODELS = ["gpt-image-1", "gpt-image-1.5"]
+VOIDAI_MODELS = [
+    "gpt-image-1",
+    "gpt-image-1.5",
+    "imagen-3.0-generate-002",
+    "flux-kontext-pro",
+    "midjourney",
+]
 
 NAGA_API_BASE = os.getenv("NAGA_API_BASE", "https://api.naga.ac/v1")
 NAGA_MODELS = ["NAGA_DALLE3", "NAGA_FLUX"]
