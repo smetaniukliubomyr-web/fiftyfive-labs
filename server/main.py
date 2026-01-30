@@ -180,46 +180,67 @@ class RateLimiter:
             if api_key_id in self.api_key_usage:
                 self.api_key_usage[api_key_id]["count"] += 1
     
-    async def check_concurrent(self, api_key_id: str, user_id: str, 
+    async def check_concurrent(self, api_key_id: str, user_id: str,
                                 api_key_limit: int, user_limit: int) -> Tuple[bool, str]:
-        """Check concurrent generation limits"""
-        async with self._lock:
-            api_concurrent = self.api_key_concurrent.get(api_key_id, 0)
-            user_concurrent = self.user_concurrent.get(user_id, 0)
-            
-            if api_concurrent >= api_key_limit:
+        """Check concurrent limits from DB (single source of truth)."""
+        con = db_conn()
+        try:
+            api_count = con.execute(
+                "SELECT COUNT(*) as c FROM jobs WHERE status = 'processing' AND api_key_id = ?",
+                (api_key_id,)
+            ).fetchone()["c"]
+            user_count = con.execute(
+                "SELECT COUNT(*) as c FROM jobs WHERE status = 'processing' AND user_id = ?",
+                (user_id,)
+            ).fetchone()["c"]
+            if api_count >= api_key_limit:
                 return False, f"API key concurrent limit reached ({api_key_limit})"
-            
-            if user_concurrent >= user_limit:
+            if user_count >= user_limit:
                 return False, f"User concurrent limit reached ({user_limit})"
-            
             return True, ""
-    
+        finally:
+            con.close()
+
     async def acquire_concurrent(self, api_key_id: str, user_id: str):
-        """Acquire concurrent slot"""
-        async with self._lock:
-            self.api_key_concurrent[api_key_id] = self.api_key_concurrent.get(api_key_id, 0) + 1
-            self.user_concurrent[user_id] = self.user_concurrent.get(user_id, 0) + 1
-    
+        """No-op: slots are counted from DB only."""
+        pass
+
     async def release_concurrent(self, api_key_id: str, user_id: str):
-        """Release concurrent slot"""
-        async with self._lock:
-            if api_key_id in self.api_key_concurrent:
-                self.api_key_concurrent[api_key_id] = max(0, self.api_key_concurrent[api_key_id] - 1)
-            if user_id in self.user_concurrent:
-                self.user_concurrent[user_id] = max(0, self.user_concurrent[user_id] - 1)
-    
+        """No-op: slots are counted from DB only."""
+        pass
+
     def get_stats(self) -> Dict:
-        """Get current rate limiter stats"""
-        return {
-            "api_key_usage": dict(self.api_key_usage),
-            "api_key_concurrent": dict(self.api_key_concurrent),
-            "user_concurrent": dict(self.user_concurrent)
-        }
-    
+        """Get current rate limiter stats (concurrent from DB)."""
+        con = db_conn()
+        try:
+            rows = con.execute(
+                "SELECT api_key_id, user_id FROM jobs WHERE status = 'processing'"
+            ).fetchall()
+            api_key_concurrent: Dict[str, int] = {}
+            user_concurrent: Dict[str, int] = {}
+            for r in rows:
+                if r["api_key_id"]:
+                    api_key_concurrent[r["api_key_id"]] = api_key_concurrent.get(r["api_key_id"], 0) + 1
+                if r["user_id"]:
+                    user_concurrent[r["user_id"]] = user_concurrent.get(r["user_id"], 0) + 1
+            return {
+                "api_key_usage": dict(self.api_key_usage),
+                "api_key_concurrent": api_key_concurrent,
+                "user_concurrent": user_concurrent
+            }
+        finally:
+            con.close()
+
     def get_user_concurrent(self, user_id: str) -> int:
-        """Get current concurrent count for a user"""
-        return self.user_concurrent.get(user_id, 0)
+        """Get current concurrent count for a user from DB."""
+        con = db_conn()
+        try:
+            return con.execute(
+                "SELECT COUNT(*) as c FROM jobs WHERE status = 'processing' AND user_id = ?",
+                (user_id,)
+            ).fetchone()["c"]
+        finally:
+            con.close()
 
 rate_limiter = RateLimiter()
 
@@ -532,9 +553,6 @@ async def cleanup_stuck_tasks():
                 for job in stuck_jobs:
                     log_event("warning", "stuck_task", f"Found stuck task {job['id']}, marking as failed")
                     
-                    # Release concurrent slot
-                    if job["api_key_id"]:
-                        await rate_limiter.release_concurrent(job["api_key_id"], job["user_id"])
                     
                     # Mark as failed
                     con.execute(
@@ -1435,8 +1453,6 @@ async def generate_image_task(job_id: str, api_key_id: str, user_id: str):
             log_event("error", "generation_failed", f"Generation failed: {str(e)}", user_id=user_id)
     
     finally:
-        # Release concurrent slot
-        await rate_limiter.release_concurrent(api_key_id, user_id)
         con.close()
 
 @app.post("/api/generate")
@@ -1487,9 +1503,6 @@ async def generate_image(
     )
     if not allowed:
         raise HTTPException(429, msg)
-    
-    # Acquire concurrent slot
-    await rate_limiter.acquire_concurrent(api_key_id, user_id)
     
     # Create job
     job_id = str(uuid.uuid4())
@@ -1822,11 +1835,6 @@ async def cancel_task(
                         )
             except Exception as e:
                 _debug_log(f"[CANCEL] Could not cancel in Voicer API: {e}")
-        
-        # Release concurrent slot if processing
-        if job["api_key_id"] and job["status"] == "processing":
-            await rate_limiter.release_concurrent(job["api_key_id"], job["user_id"])
-            _debug_log(f"[CANCEL] Released slot for user {user['id']}")
         
         # Update status
         con.execute(
@@ -2627,11 +2635,14 @@ async def admin_list_api_keys(x_admin_token: Optional[str] = Header(None)):
     con = db_conn()
     try:
         keys = con.execute("SELECT * FROM api_keys ORDER BY created_at_ms DESC").fetchall()
+        # Current concurrent from DB (single source of truth)
+        concurrent_by_key = dict(con.execute(
+            "SELECT api_key_id, COUNT(*) as c FROM jobs WHERE status = 'processing' AND api_key_id IS NOT NULL GROUP BY api_key_id"
+        ).fetchall())
         
         result_keys = []
         for k in keys:
             provider = k["provider"] if k["provider"] else "together"
-            # Normalize provider name for consistency
             if provider not in ["voicer", "elevenlabs", "whisk", "voidai", "naga", "together"]:
                 _debug_log(f"[ADMIN] Warning: Unknown provider '{provider}' for key {k['id']}, keeping as is")
             
@@ -2639,7 +2650,7 @@ async def admin_list_api_keys(x_admin_token: Optional[str] = Header(None)):
                 "id": k["id"],
                 "name": k["name"],
                 "api_key": k["api_key"][:12] + "..." + k["api_key"][-4:] if k["api_key"] else "",
-                "provider": provider,  # Use normalized provider
+                "provider": provider,
                 "hourly_limit": k["hourly_limit"],
                 "concurrent_limit": k["concurrent_limit"],
                 "is_active": bool(k["is_active"]),
@@ -2648,7 +2659,7 @@ async def admin_list_api_keys(x_admin_token: Optional[str] = Header(None)):
                 "created_at_ms": k["created_at_ms"],
                 "last_used_ms": k["last_used_ms"],
                 "current_usage": rate_limiter.api_key_usage.get(k["id"], {}).get("count", 0),
-                "current_concurrent": rate_limiter.api_key_concurrent.get(k["id"], 0)
+                "current_concurrent": concurrent_by_key.get(k["id"], 0)
             })
         
         return {
@@ -3406,9 +3417,6 @@ async def api_v1_synthesize(
         task_status = "queued"
         result_msg = "Task queued, will start when slot available"
     else:
-        # Send to Voicer API
-        await rate_limiter.acquire_concurrent(api_key_id, user["id"])
-        
         # Create CLEAN payload - only valid ElevenLabs API fields!
         voicer_payload = {
             "text": text,
@@ -3435,7 +3443,6 @@ async def api_v1_synthesize(
             )
             
             if response.status_code != 200:
-                await rate_limiter.release_concurrent(api_key_id, user["id"])
                 raise HTTPException(response.status_code, f"Voicer API error: {response.text}")
             
             result = response.json()
@@ -3618,8 +3625,6 @@ async def api_v1_status(
                                             WHERE id = ?
                                         """, (now_ms(), _json_dumps(metadata), task_id))
                                         con.commit()
-                                        
-                                        await rate_limiter.acquire_concurrent(api_key_id, user["id"])
                                         
                                         return {"status": "processing", "progress": 0}
                             except Exception as e:
@@ -4355,12 +4360,7 @@ async def voice_status(
                             api_key_id, voicer_key = key_data
                             _debug_log(f"[QUEUE] Sending to Voicer API...")
                             
-                            slot_acquired = False
                             try:
-                                # Acquire slot BEFORE sending so release on completion uses same key
-                                await rate_limiter.acquire_concurrent(api_key_id, user["id"])
-                                slot_acquired = True
-                                
                                 payload = {
                                     "text": full_text,
                                     "voice_id": metadata.get("voice_id"),
@@ -4406,15 +4406,8 @@ async def voice_status(
                                         "voicer_task_id": voicer_task_id
                                     }
                                 else:
-                                    if slot_acquired:
-                                        await rate_limiter.release_concurrent(api_key_id, user["id"])
                                     _debug_log(f"[QUEUE] Voicer API error: {response.text}")
                             except Exception as e:
-                                if slot_acquired:
-                                    try:
-                                        await rate_limiter.release_concurrent(api_key_id, user["id"])
-                                    except Exception:
-                                        pass
                                 _debug_log(f"[QUEUE] Error starting queued task: {e}")
                                 import traceback
                                 traceback.print_exc()
@@ -4499,11 +4492,6 @@ async def voice_status(
                     
                     # Only update if still processing
                     if job and job["status"] == "processing":
-                        # Release concurrent slot FIRST
-                        if job["api_key_id"]:
-                            await rate_limiter.release_concurrent(job["api_key_id"], job["user_id"])
-                            log_event("info", "slot_released", f"Released slot for task {task_id}")
-                        
                         audio_path = None
                         # If completed, try to download audio in background (don't block status response)
                         if status == "completed":
@@ -5905,12 +5893,15 @@ async def admin_realtime_stats(x_admin_token: Optional[str] = Header(None)):
                     "concurrent_limit": u["concurrent_limit"]
                 })
         
-        # Get API key stats
+        # Get API key stats from DB (single source of truth)
+        concurrent_by_key = dict(con.execute(
+            "SELECT api_key_id, COUNT(*) as c FROM jobs WHERE status = 'processing' AND api_key_id IS NOT NULL GROUP BY api_key_id"
+        ).fetchall())
         keys = con.execute("SELECT id, name, concurrent_limit FROM api_keys WHERE is_active = 1").fetchall()
         key_stats = []
         total_concurrent = 0
         for k in keys:
-            concurrent = rate_limiter.api_key_concurrent.get(k["id"], 0)
+            concurrent = concurrent_by_key.get(k["id"], 0)
             total_concurrent += concurrent
             key_stats.append({
                 "key_id": k["id"],
@@ -6039,80 +6030,26 @@ async def admin_cancel_task(task_id: str, x_admin_token: Optional[str] = Header(
 
 @app.post("/api/admin/reset-concurrent")
 async def admin_reset_concurrent(x_admin_token: Optional[str] = Header(None)):
-    """Reset all concurrent slots (use when slots are stuck)"""
+    """Slots are now from DB only; no in-memory state to reset."""
     _require_admin(x_admin_token)
-    
-    # Get current state before reset
-    old_state = {
-        "api_key_concurrent": dict(rate_limiter.api_key_concurrent),
-        "user_concurrent": dict(rate_limiter.user_concurrent)
-    }
-    
-    # Reset all concurrent counters
-    async with rate_limiter._lock:
-        rate_limiter.api_key_concurrent.clear()
-        rate_limiter.user_concurrent.clear()
-    
-    log_event("warning", "concurrent_reset", "Admin reset all concurrent slots", meta={"old_state": old_state})
-    
     return {
         "ok": True,
-        "message": "All concurrent slots reset",
-        "old_state": old_state
+        "message": "Concurrent slots are read from database only; no reset needed."
     }
 
 @app.post("/api/admin/sync-concurrent")
 async def admin_sync_concurrent(x_admin_token: Optional[str] = Header(None)):
-    """Sync concurrent slots with actual processing jobs in database"""
+    """Slots are always from DB; no sync needed."""
     _require_admin(x_admin_token)
-    
     con = db_conn()
     try:
-        # Get all actually processing jobs
-        processing_jobs = con.execute("""
-            SELECT user_id, api_key_id, COUNT(*) as cnt 
-            FROM jobs 
-            WHERE status = 'processing' 
-            GROUP BY user_id, api_key_id
-        """).fetchall()
-        
-        # Get old state
-        old_state = {
-            "api_key_concurrent": dict(rate_limiter.api_key_concurrent),
-            "user_concurrent": dict(rate_limiter.user_concurrent)
-        }
-        
-        # Reset and rebuild
-        async with rate_limiter._lock:
-            rate_limiter.api_key_concurrent.clear()
-            rate_limiter.user_concurrent.clear()
-            
-            for job in processing_jobs:
-                user_id = job["user_id"]
-                api_key_id = job["api_key_id"]
-                count = job["cnt"]
-                
-                if api_key_id:
-                    rate_limiter.api_key_concurrent[api_key_id] = rate_limiter.api_key_concurrent.get(api_key_id, 0) + count
-                if user_id:
-                    rate_limiter.user_concurrent[user_id] = rate_limiter.user_concurrent.get(user_id, 0) + count
-        
-        new_state = {
-            "api_key_concurrent": dict(rate_limiter.api_key_concurrent),
-            "user_concurrent": dict(rate_limiter.user_concurrent)
-        }
-        
-        log_event("info", "concurrent_synced", "Admin synced concurrent slots with DB", meta={
-            "old_state": old_state,
-            "new_state": new_state
-        })
-        
+        count = con.execute(
+            "SELECT COUNT(*) as c FROM jobs WHERE status = 'processing'"
+        ).fetchone()["c"]
         return {
             "ok": True,
-            "message": "Concurrent slots synced with database",
-            "old_state": old_state,
-            "new_state": new_state,
-            "processing_jobs": len(processing_jobs)
+            "message": "Concurrent slots are always from database.",
+            "processing_jobs": count
         }
     finally:
         con.close()
