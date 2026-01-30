@@ -3142,7 +3142,6 @@ function ImageGenerationTab({ user, refreshUser, showToast }) {
                     { id: 'IMAGEN_4', name: 'Imagen 4 (Fast Gen)', desc: 'Fast Gen', defaultCredits: 1 },
                     { id: 'GEM_PIX', name: 'Nano Banana', desc: 'Flow', defaultCredits: 1 },
                     { id: 'GEM_PIX_2', name: 'Nano Banana Pro', desc: 'Flow', defaultCredits: 2 },
-                    { id: 'IMAGEN_3_5', name: 'Imagen 3.5', desc: 'Flow', defaultCredits: 1 },
                     { id: 'GROK', name: 'Grok (4 images)', desc: '4 variants', defaultCredits: 1 },
                     { id: 'gpt-image-1', name: 'GPT Image 1', desc: 'High quality', defaultCredits: 1 },
                     { id: 'gpt-image-1.5', name: 'GPT Image 1.5', desc: 'High quality', defaultCredits: 1 },
@@ -5432,7 +5431,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                             {k.provider === 'elevenlabs' 
                               ? 'ElevenLabs' 
                               : (k.provider === 'whisk')
-                              ? 'Fast Gen (Imagen 4)'
+                              ? 'Fast Gen Api'
                               : k.provider === 'voidai'
                               ? 'VoidAI API'
                               : k.provider === 'naga'
@@ -5448,8 +5447,8 @@ function AdminPanelPage({ showToast, onLogout }) {
                       </button>
                     </div>
                     
-                    {/* Concurrent Slots - Only for Voicer */}
-                    {k.provider !== 'elevenlabs' && k.provider !== 'whisk' && k.provider !== 'voidai' && k.provider !== 'naga' && (
+                    {/* Concurrent Slots - Voicer and Image providers */}
+                    {k.provider !== 'elevenlabs' && (
                       <div className="mb-4">
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs text-gray-500">Concurrent Slots</span>
@@ -5555,7 +5554,7 @@ function AdminPanelPage({ showToast, onLogout }) {
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <Image className="w-4 h-4" />
-                    <span className="font-medium text-sm">Fast Gen (Imagen 4)</span>
+                    <span className="font-medium text-sm">Fast Gen Api</span>
                   </div>
                   <p className="text-xs text-gray-500">Image generation</p>
                 </button>
@@ -5644,7 +5643,6 @@ function AdminPanelPage({ showToast, onLogout }) {
                   { id: 'IMAGEN_4', name: 'Imagen 4 (Fast Gen)', model: 'imagen4', defaultCredits: 1 },
                   { id: 'GEM_PIX', name: 'Nano Banana (Flow)', model: 'GEM_PIX', defaultCredits: 1 },
                   { id: 'GEM_PIX_2', name: 'Nano Banana Pro (Flow)', model: 'GEM_PIX_2', defaultCredits: 2 },
-                  { id: 'IMAGEN_3_5', name: 'Imagen 3.5 (Flow)', model: 'IMAGEN_3_5', defaultCredits: 1 },
                   { id: 'GROK', name: 'Grok (4 images)', model: 'grok', defaultCredits: 1 },
                   { id: 'gpt-image-1', name: 'GPT Image 1 (VoidAI)', model: 'gpt-image-1', defaultCredits: 1 },
                   { id: 'gpt-image-1.5', name: 'GPT Image 1.5 (VoidAI)', model: 'gpt-image-1.5', defaultCredits: 1 },

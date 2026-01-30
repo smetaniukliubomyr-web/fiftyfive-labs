@@ -404,7 +404,6 @@ def init_db():
         ('IMAGEN_4', 1),
         ('GEM_PIX', 1),
         ('GEM_PIX_2', 2),
-        ('IMAGEN_3_5', 1),
         ('GROK', 1),
         ('gpt-image-1', 1),
         ('gpt-image-1.5', 1),
@@ -4591,7 +4590,7 @@ FAST_GEN_API_BASE_DEFAULT = "https://googler.fast-gen.ai"
 WHISK_API_BASE = (os.getenv("WHISK_API_BASE") or os.getenv("FAST_GEN_API_BASE") or FAST_GEN_API_BASE_DEFAULT).rstrip("/")
 
 # Same API base/key: Flow (Nano, Nano Pro, Imagen 3.5) and Grok
-FLOW_MODELS = ["GEM_PIX", "GEM_PIX_2", "IMAGEN_3_5"]  # POST /api/v4/flow/image/generate
+FLOW_MODELS = ["GEM_PIX", "GEM_PIX_2"]  # POST /api/v4/flow/image/generate
 GROK_MODEL = "GROK"  # POST /api/v4/grok/image/generate (returns 4 images)
 
 VOIDAI_API_BASE = os.getenv("VOIDAI_API_BASE", "https://api.voidai.app/v1")
@@ -4706,7 +4705,7 @@ async def image_generate(
             raise HTTPException(503, "No Fast Gen API key. Add a Fast Gen API key in admin or set WHISK_API_KEY.")
         api_key_id, whisk_api_key = key_data
         provider = "flow"
-        model = model_old  # GEM_PIX, GEM_PIX_2, IMAGEN_3_5
+        model = model_old  # GEM_PIX, GEM_PIX_2
     elif is_grok:
         key_data = get_whisk_api_key()
         if not key_data:
@@ -4729,7 +4728,7 @@ async def image_generate(
         model = NAGA_MODEL_MAP.get(model_old, "flux-1-schnell:free")
         provider = "naga"
     else:
-        raise HTTPException(400, f"Unknown model: {model_old}. Use IMAGEN_4, GEM_PIX, GEM_PIX_2, IMAGEN_3_5, GROK, VoidAI or Naga models.")
+        raise HTTPException(400, f"Unknown model: {model_old}. Use IMAGEN_4, GEM_PIX, GEM_PIX_2, GROK, VoidAI or Naga models.")
     
     # Validate
     if not api_key_id or not provider:
@@ -5223,7 +5222,7 @@ async def image_generate(
                 }
                 return out
             elif is_flow:
-                # POST /api/v4/flow/image/generate - Flow: GEM_PIX, GEM_PIX_2, IMAGEN_3_5 (aspect_ratio PORTRAIT or LANDSCAPE only)
+                # POST /api/v4/flow/image/generate - Flow: GEM_PIX, GEM_PIX_2 (aspect_ratio PORTRAIT or LANDSCAPE only)
                 flow_ar = aspect_ratio_old if aspect_ratio_old in ("IMAGE_ASPECT_RATIO_PORTRAIT", "IMAGE_ASPECT_RATIO_LANDSCAPE") else "IMAGE_ASPECT_RATIO_LANDSCAPE"
                 flow_payload = {"prompt": prompt, "aspect_ratio": flow_ar, "model": model}
                 if seed is not None:
