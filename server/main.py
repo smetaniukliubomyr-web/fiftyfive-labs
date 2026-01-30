@@ -1337,7 +1337,7 @@ async def generate_image_task(job_id: str, api_key_id: str, user_id: str):
         # Get API key
         api_key_record = con.execute("SELECT * FROM api_keys WHERE id = ?", (api_key_id,)).fetchone()
         if not api_key_record:
-            con.execute("UPDATE jobs SET status = 'failed', error = 'No API key available' WHERE id = ?", (job_id,))
+            con.execute("UPDATE jobs SET status = 'failed', error = 'No API key available', completed_at_ms = ? WHERE id = ?", (now_ms(), job_id))
             con.commit()
             return
         
@@ -1498,11 +1498,12 @@ async def generate_image(
     try:
         con.execute("""
             INSERT INTO jobs (id, user_id, api_key_id, status, prompt, negative_prompt, 
-                            model, width, height, steps, seed, created_at_ms)
-            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
+                            model, width, height, steps, seed, created_at_ms, metadata_json)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             job_id, user_id, api_key_id, body.prompt, body.negative_prompt,
-            body.model, body.width, body.height, body.steps, body.seed, now_ms()
+            body.model, body.width, body.height, body.steps, body.seed, now_ms(),
+            '{"type":"image"}'
         ))
         
         # Deduct credits
@@ -4354,22 +4355,28 @@ async def voice_status(
                             api_key_id, voicer_key = key_data
                             _debug_log(f"[QUEUE] Sending to Voicer API...")
                             
-                            payload = {
-                                "text": full_text,
-                                "voice_id": metadata.get("voice_id"),
-                                "model_id": job["model"] or "eleven_multilingual_v2",
-                                "voice_settings": metadata.get("voice_settings", {})
-                            }
-                            
-                            async with httpx.AsyncClient(timeout=60) as client:
-                                response = await client.post(
-                                    f"{VOICER_API_BASE}/voice/synthesize",
-                                    headers={
-                                        "Authorization": f"Bearer {voicer_key}",
-                                        "Content-Type": "application/json"
-                                    },
-                                    json=payload
-                                )
+                            slot_acquired = False
+                            try:
+                                # Acquire slot BEFORE sending so release on completion uses same key
+                                await rate_limiter.acquire_concurrent(api_key_id, user["id"])
+                                slot_acquired = True
+                                
+                                payload = {
+                                    "text": full_text,
+                                    "voice_id": metadata.get("voice_id"),
+                                    "model_id": job["model"] or "eleven_multilingual_v2",
+                                    "voice_settings": metadata.get("voice_settings", {})
+                                }
+                                
+                                async with httpx.AsyncClient(timeout=60) as client:
+                                    response = await client.post(
+                                        f"{VOICER_API_BASE}/voice/synthesize",
+                                        headers={
+                                            "Authorization": f"Bearer {voicer_key}",
+                                            "Content-Type": "application/json"
+                                        },
+                                        json=payload
+                                    )
                                 
                                 _debug_log(f"[QUEUE] Voicer API response: {response.status_code}")
                                 
@@ -4378,31 +4385,39 @@ async def voice_status(
                                     voicer_task_id = result.get("task_id")
                                     _debug_log(f"[QUEUE] Got Voicer task ID: {voicer_task_id}")
                                     
-                                    # Update job: change status to processing and store voicer_task_id in metadata
+                                    # Update job: api_key_id (so release uses same key), status, metadata
                                     metadata["voicer_task_id"] = voicer_task_id
                                     metadata["full_text"] = None  # Remove to save space
                                     
                                     con.execute("""
                                         UPDATE jobs 
-                                        SET status = 'processing', 
+                                        SET api_key_id = ?, status = 'processing', 
                                             started_at_ms = ?,
                                             metadata_json = ?
                                         WHERE id = ?
-                                    """, (now_ms(), _json_dumps(metadata), task_id))
+                                    """, (api_key_id, now_ms(), _json_dumps(metadata), task_id))
                                     con.commit()
-                                    
-                                    await rate_limiter.acquire_concurrent(api_key_id, user["id"])
                                     
                                     _debug_log(f"[QUEUE] Task started successfully! Task {task_id} now processing (Voicer ID: {voicer_task_id})")
                                     
-                                    # Return processing status with voicer_task_id for status checks
                                     return {
                                         "status": "processing",
                                         "progress": 0,
                                         "voicer_task_id": voicer_task_id
                                     }
                                 else:
+                                    if slot_acquired:
+                                        await rate_limiter.release_concurrent(api_key_id, user["id"])
                                     _debug_log(f"[QUEUE] Voicer API error: {response.text}")
+                            except Exception as e:
+                                if slot_acquired:
+                                    try:
+                                        await rate_limiter.release_concurrent(api_key_id, user["id"])
+                                    except Exception:
+                                        pass
+                                _debug_log(f"[QUEUE] Error starting queued task: {e}")
+                                import traceback
+                                traceback.print_exc()
                         else:
                             _debug_log(f"[QUEUE] No Voicer API key available!")
                     except Exception as e:
